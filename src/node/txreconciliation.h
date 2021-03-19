@@ -50,7 +50,7 @@ private:
     const std::unique_ptr<Impl> m_impl;
 
 public:
-    explicit TxReconciliationTracker();
+    explicit TxReconciliationTracker(uint32_t recon_version);
     ~TxReconciliationTracker();
 
     /**
@@ -61,6 +61,17 @@ public:
      * This function must be called only once per peer.
      */
     uint64_t PreRegisterPeer(NodeId peer_id);
+
+    /**
+     * Step 0. Once the peer agreed to reconcile txs with us, generate the state required to track
+     * ongoing reconciliations. Must be called only after pre-registering the peer and only once.
+     * Returns:
+     * - true if the peer was registered
+     * - false if the peer violates the protocol
+     * - nullopt if nothing was done (e.g., we haven't pre-registered this peer)
+     */
+    std::optional<bool> RegisterPeer(NodeId peer_id, bool is_peer_inbound, bool is_peer_recon_initiator,
+                                     bool is_peer_recon_responder, uint32_t peer_recon_version, uint64_t remote_salt);
 
     /**
      * Attempts to forget txreconciliation-related state of the peer (if we previously stored any).
