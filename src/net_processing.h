@@ -7,6 +7,7 @@
 #define BITCOIN_NET_PROCESSING_H
 
 #include <net.h>
+#include <node/txreconciliation.h>
 #include <validationinterface.h>
 
 class AddrMan;
@@ -43,7 +44,8 @@ class PeerManager : public CValidationInterface, public NetEventsInterface
 public:
     static std::unique_ptr<PeerManager> make(CConnman& connman, AddrMan& addrman,
                                              BanMan* banman, ChainstateManager& chainman,
-                                             CTxMemPool& pool, bool ignore_incoming_txs);
+                                             CTxMemPool& pool, std::unique_ptr<TxReconciliationTracker> txreconciliation,
+                                             bool ignore_incoming_txs);
     virtual ~PeerManager() { }
 
     /**

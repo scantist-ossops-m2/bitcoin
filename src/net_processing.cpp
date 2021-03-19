@@ -497,7 +497,8 @@ class PeerManagerImpl final : public PeerManager
 public:
     PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                     BanMan* banman, ChainstateManager& chainman,
-                    CTxMemPool& pool, bool ignore_incoming_txs);
+                    CTxMemPool& pool, std::unique_ptr<TxReconciliationTracker> txreconciliation,
+                    bool ignore_incoming_txs);
 
     /** Overridden from CValidationInterface. */
     void BlockConnected(const std::shared_ptr<const CBlock>& pblock, const CBlockIndex* pindexConnected) override
@@ -708,6 +709,7 @@ private:
     ChainstateManager& m_chainman;
     CTxMemPool& m_mempool;
     TxRequestTracker m_txrequest GUARDED_BY(::cs_main);
+    std::unique_ptr<TxReconciliationTracker> m_txreconciliation;
 
     /** The height of the best chain */
     std::atomic<int> m_best_height{-1};
@@ -1762,20 +1764,23 @@ std::optional<std::string> PeerManagerImpl::FetchBlock(NodeId peer_id, const CBl
 
 std::unique_ptr<PeerManager> PeerManager::make(CConnman& connman, AddrMan& addrman,
                                                BanMan* banman, ChainstateManager& chainman,
-                                               CTxMemPool& pool, bool ignore_incoming_txs)
+                                               CTxMemPool& pool, std::unique_ptr<TxReconciliationTracker> txreconciliation,
+                                               bool ignore_incoming_txs)
 {
-    return std::make_unique<PeerManagerImpl>(connman, addrman, banman, chainman, pool, ignore_incoming_txs);
+    return std::make_unique<PeerManagerImpl>(connman, addrman, banman, chainman, pool, std::move(txreconciliation), ignore_incoming_txs);
 }
 
 PeerManagerImpl::PeerManagerImpl(CConnman& connman, AddrMan& addrman,
                                  BanMan* banman, ChainstateManager& chainman,
-                                 CTxMemPool& pool, bool ignore_incoming_txs)
+                                 CTxMemPool& pool, std::unique_ptr<TxReconciliationTracker> txreconciliation,
+                                 bool ignore_incoming_txs)
     : m_chainparams(chainman.GetParams()),
       m_connman(connman),
       m_addrman(addrman),
       m_banman(banman),
       m_chainman(chainman),
       m_mempool(pool),
+      m_txreconciliation(std::move(txreconciliation)),
       m_ignore_incoming_txs(ignore_incoming_txs)
 {
 }
@@ -3236,8 +3241,6 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::SENDADDRV2));
         }
 
-        m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::VERACK));
-
         pfrom.m_has_all_wanted_services = HasAllDesirableServiceFlags(nServices);
         peer->m_their_services = nServices;
         pfrom.SetAddrLocal(addrMe);
@@ -3260,6 +3263,25 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
             }
             if (fRelay) pfrom.m_relays_txs = true;
         }
+
+        if (greatest_common_version >= WTXID_RELAY_VERSION && m_txreconciliation) {
+            // Per BIP-330, we announce txreconciliation support if:
+            // - protocol version per the VERSION message supports WTXID_RELAY;
+            // - we intended to exchange transactions over this connection while establishing it
+            //   and the peer indicated support for transaction relay in the VERSION message;
+            // - we are not in -blocksonly mode.
+            if (pfrom.m_relays_txs && !m_ignore_incoming_txs) {
+                const uint64_t recon_salt = m_txreconciliation->PreRegisterPeer(pfrom.GetId());
+                // We suggest our txreconciliation role (initiator/responder) based on
+                // the connection direction.
+                m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::SENDTXRCNCL,
+                                                             !pfrom.IsInboundConn(),
+                                                             pfrom.IsInboundConn(),
+                                                             TXRECONCILIATION_VERSION, recon_salt));
+            }
+        }
+
+        m_connman.PushMessage(&pfrom, msg_maker.Make(NetMsgType::VERACK));
 
         // Potentially mark this peer as a preferred download peer.
         {
