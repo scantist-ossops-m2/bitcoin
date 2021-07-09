@@ -44,6 +44,13 @@ public:
 
         //! Implied maximum number of active entries in the table.
         uint64_t MaxEntries() const { return uint64_t{Generations()} * m_gen_size; }
+
+        //! Implied effective alpha.
+        double Alpha() const { return (double)m_gen_size * Generations() / (m_buckets << BUCKET_BITS); }
+
+        Params() = default;
+        Params(const Params&) = default;
+        Params(uint32_t gen_size, unsigned gen_cbits, unsigned fpr_bits, double alpha, unsigned max_kicks);
     };
 
 private:
@@ -86,7 +93,8 @@ private:
     OverflowTable m_overflow;
     OverflowTable::iterator m_overflow_reinsert = m_overflow.end();
 
-    size_t m_max_overflow = 0;
+    uint64_t m_total_gens{0};
+    size_t m_max_overflow{0};
 
     struct DecodedEntry
     {
@@ -141,7 +149,10 @@ public:
     //! Insert data.
     void Insert(Span<const unsigned char> data);
 
-    size_t MaxOverflow() const { return m_max_overflow; }
+    uint64_t counted_gens = 0;
+    uint64_t gens_up_to[17] = {0};
+
+    const Params& GetParams() const { return m_params; }
 };
 
 

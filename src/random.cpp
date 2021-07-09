@@ -6,14 +6,13 @@
 #include <random.h>
 
 #include <compat/cpuid.h>
-#include <crypto/sha256.h>
+//#include <crypto/sha256.h>
 #include <crypto/sha512.h>
 #include <support/cleanse.h>
 #ifdef WIN32
 #include <compat.h> // for Windows API
 #include <wincrypt.h>
 #endif
-#include <logging.h>  // for LogPrintf()
 #include <randomenv.h>
 #include <support/allocators/secure.h>
 #include <sync.h>     // for Mutex
@@ -43,7 +42,7 @@
 
 [[noreturn]] static void RandFailure()
 {
-    LogPrintf("Failed to read randomness, aborting\n");
+    //LogPrintf("Failed to read randomness, aborting\n");
     std::abort();
 }
 
@@ -97,10 +96,10 @@ static void ReportHardwareRand()
     // This must be done in a separate function, as InitHardwareRand() may be indirectly called
     // from global constructors, before logging is initialized.
     if (g_rdseed_supported) {
-        LogPrintf("Using RdSeed as additional entropy source\n");
+//        LogPrintf("Using RdSeed as additional entropy source\n");
     }
     if (g_rdrand_supported) {
-        LogPrintf("Using RdRand as an additional entropy source\n");
+//        LogPrintf("Using RdRand as an additional entropy source\n");
     }
 }
 
@@ -364,7 +363,7 @@ class RNGState {
     bool m_strongly_seeded GUARDED_BY(m_mutex) = false;
 
     Mutex m_events_mutex;
-    CSHA256 m_events_hasher GUARDED_BY(m_events_mutex);
+    CSHA512 m_events_hasher GUARDED_BY(m_events_mutex);
 
 public:
     RNGState() noexcept
@@ -396,13 +395,13 @@ public:
         // since we want it to be fast as network peers may be able to trigger it repeatedly.
         LOCK(m_events_mutex);
 
-        unsigned char events_hash[32];
+        unsigned char events_hash[64];
         m_events_hasher.Finalize(events_hash);
-        hasher.Write(events_hash, 32);
+        hasher.Write(events_hash, 64);
 
         // Re-initialize the hasher with the finalized state to use later.
         m_events_hasher.Reset();
-        m_events_hasher.Write(events_hash, 32);
+        m_events_hasher.Write(events_hash, 64);
     }
 
     /** Extract up to 32 bytes of entropy from the RNG state, mixing in new entropy from hasher.
@@ -444,7 +443,7 @@ RNGState& GetRNGState() noexcept
 {
     // This C++11 idiom relies on the guarantee that static variable are initialized
     // on first call, even when multiple parallel calls are permitted.
-    static std::vector<RNGState, secure_allocator<RNGState>> g_rng(1);
+    static std::vector<RNGState> g_rng(1);
     return g_rng[0];
 }
 }
@@ -518,9 +517,9 @@ static void SeedPeriodic(CSHA512& hasher, RNGState& rng) noexcept
     rng.SeedEvents(hasher);
 
     // Dynamic environment data (performance monitoring, ...)
-    auto old_size = hasher.Size();
+//    auto old_size = hasher.Size();
     RandAddDynamicEnv(hasher);
-    LogPrint(BCLog::RAND, "Feeding %i bytes of dynamic environment data into RNG\n", hasher.Size() - old_size);
+//    LogPrint(BCLog::RAND, "Feeding %i bytes of dynamic environment data into RNG\n", hasher.Size() - old_size);
 
     // Strengthen for 10 ms
     SeedStrengthen(hasher, rng, 10000);
@@ -535,12 +534,12 @@ static void SeedStartup(CSHA512& hasher, RNGState& rng) noexcept
     SeedSlow(hasher, rng);
 
     // Dynamic environment data (performance monitoring, ...)
-    auto old_size = hasher.Size();
+//    auto old_size = hasher.Size();
     RandAddDynamicEnv(hasher);
 
     // Static environment data
     RandAddStaticEnv(hasher);
-    LogPrint(BCLog::RAND, "Feeding %i bytes of environment data into RNG\n", hasher.Size() - old_size);
+//    LogPrint(BCLog::RAND, "Feeding %i bytes of environment data into RNG\n", hasher.Size() - old_size);
 
     // Strengthen for 100 ms
     SeedStrengthen(hasher, rng, 100000);

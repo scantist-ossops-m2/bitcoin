@@ -183,7 +183,7 @@ RollingCuckooFilter::Params ChooseParams(uint32_t window, unsigned fpbits, doubl
     if (max_access) {
         ret.m_max_kicks = max_access;
     } else {
-        double real_alpha = (double)ret.m_gen_size * ret.Generations() / (ret.m_buckets << RollingCuckooFilter::BUCKET_BITS);
+        double real_alpha = ret.Alpha();
         if (real_alpha < 0.850001) {
             ret.m_max_kicks = std::ceil(std::max(16.0, 2.884501 * std::log(window) - 2.0));
         } else if (real_alpha < 0.900001) {
@@ -462,6 +462,14 @@ void RollingCuckooFilter::Insert(Span<const unsigned char> data)
         // Start a new generation
         m_this_gen = ReduceOnce(m_this_gen + 1, m_gens * 2);
         m_count_this_gen = 0;
+        m_total_gens += 1;
+        if (m_total_gens >= 4*m_gens) {
+            ++counted_gens;
+            for (int i = m_max_overflow; i <= 16; ++i) {
+                gens_up_to[i] += 1;
+            }
+        }
+        m_max_overflow = 0;
         if (m_this_gen == 0 || m_this_gen == m_gens) {
             m_count_this_cycle = 0;
             m_swept_this_cycle = 0;
@@ -531,4 +539,16 @@ void RollingCuckooFilter::Insert(Span<const unsigned char> data)
             max_access = AddEntry(bucket, index1, index2, fpr, gen, max_access);
         }
     }
+    m_max_overflow = std::max(m_max_overflow, m_overflow.size());
+}
+
+RollingCuckooFilter::Params::Params(uint32_t gen_size, unsigned gen_cbits, unsigned fp_bits, double alpha, unsigned max_kicks)
+{
+    m_gen_size = gen_size;
+    m_gen_cbits = gen_cbits;
+    unsigned gens = Generations();
+    assert(fp_bits >= 10 && fp_bits <= 50);
+    m_fpr_bits = fp_bits + 3;
+    m_max_kicks = max_kicks;
+    m_buckets = ((size_t)std::ceil((uint64_t)m_gen_size * gens / (alpha * BUCKET_SIZE * 2))) << 1;
 }
