@@ -79,6 +79,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    printf("%lu\n", (unsigned long)high);
+    printf("alpha=%f cbits=%u fpbits=%u gensize=%lu: maxiter=%lu effalpha=%f gens=%u buckets=%lu fprbits=%u tablebits=%llu\n", alpha, gen_cbits, fpbits, (unsigned long)gen_size, (unsigned long)high, param.Alpha(), (unsigned)param.Generations(), (unsigned long)param.m_buckets, (unsigned)param.m_fpr_bits, (unsigned long long)param.TableBits());
     return 0;
 }
