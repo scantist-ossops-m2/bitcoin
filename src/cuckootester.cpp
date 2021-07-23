@@ -1,38 +1,78 @@
 #include <cuckoofilter.h>
 #include <util/incbeta.h>
 #include <stdlib.h>
+#include <thread>
+#include <atomic>
+#include <mutex>
+#include <optional>
 
 static constexpr double CONFIDENCE = 0.9999;
-static constexpr double GOAL_MIN = 0.898;
-static constexpr double GOAL_MAX = 0.902;
+static constexpr double GOAL_MIN = 0.899;
+static constexpr double GOAL_MAX = 0.901;
 static constexpr double GOAL_MID = (GOAL_MIN + GOAL_MAX) * 0.5;
 static constexpr int GOAL_AIM = 2;
+static constexpr int THREADS = 30;
 
 namespace {
 
 int Test(RollingCuckooFilter::Params param, uint32_t max_access) {
     param.m_max_kicks = max_access;
-    RollingCuckooFilter filt(param, false);
-    uint64_t cnt = 0;
-    int ret;
+
     fprintf(stderr, "Testing max_access = %lu ...", (unsigned long)max_access);
-    do {
-        for (int i = 0; i < 1000; ++i) {
-            filt.Insert(Span<const unsigned char>((unsigned char*)&cnt, sizeof(cnt)));
-            ++cnt;
-        }
-        if (filt.counted_gens < 10) continue;
-        double alpha = 0.5 + filt.gens_up_to[GOAL_AIM];
-        double beta = 0.5 + filt.counted_gens - filt.gens_up_to[GOAL_AIM];
-        double ib_mid = incbeta(alpha, beta, GOAL_MID);
-        if (ib_mid >= CONFIDENCE) {ret = -1; break;}
-        if (1.0 - ib_mid >= CONFIDENCE) {ret = 1; break;}
-        double ib_min = incbeta(alpha, beta, GOAL_MIN);
-        double ib_max = incbeta(alpha, beta, GOAL_MAX);
-        if (ib_max - ib_min >= CONFIDENCE) {ret = 0; break;}
-    } while(true);
-    fprintf(stderr, "%s (%llu adds, %lu gens, <=0:%f, <=1:%f, <=2:%f, <=4:%f, <=8:%f, <=16:%f)\n", ret == 0 ? "done" : (ret == 1 ? "too high" : "too low"), (unsigned long long)cnt, (unsigned long)filt.counted_gens, (double)filt.gens_up_to[0] / filt.counted_gens, (double)filt.gens_up_to[1] / filt.counted_gens, (double)filt.gens_up_to[2] / filt.counted_gens, (double)filt.gens_up_to[4] / filt.counted_gens, (double)filt.gens_up_to[8] / filt.counted_gens, (double)filt.gens_up_to[16] / filt.counted_gens);
-    return ret;
+    std::vector<std::thread> threads;
+    threads.reserve(THREADS);
+    std::mutex mutex;
+    uint64_t total_gens = 0;
+    uint64_t good_gens = 0;
+    std::optional<int> res;
+    std::atomic<bool> done{false};
+
+    for (int t = 0; t < THREADS; ++t) {
+        threads.emplace_back([&](){
+            RollingCuckooFilter filt(param, false);
+            uint64_t cnt = 0;
+            unsigned loops = (param.m_gen_size + 99) / 100;
+            while (true) {
+                uint64_t old_thread_total = filt.counted_gens;
+                uint64_t old_thread_good = filt.gens_up_to[GOAL_AIM];
+                for (unsigned i = 0; i < loops; ++i) {
+                    for (unsigned j = 0; j < 100; ++j) {
+                        filt.Insert(Span<const unsigned char>((unsigned char*)&cnt, sizeof(cnt)));
+                        ++cnt;
+                    }
+                    if (done.load(std::memory_order_relaxed)) return;
+                }
+                uint64_t added_thread_total = filt.counted_gens - old_thread_total;
+                uint64_t added_thread_good = filt.gens_up_to[GOAL_AIM] - old_thread_good;
+                uint64_t thread_total_gens, thread_good_gens;
+                {
+                    std::unique_lock<std::mutex> lock(mutex);
+                    if (res.has_value()) return;
+                    total_gens += added_thread_total;
+                    good_gens += added_thread_good;
+                    thread_total_gens = total_gens;
+                    thread_good_gens = good_gens;
+                }
+                if (total_gens > 30) {
+                    double alpha = 0.5 + thread_good_gens;
+                    double beta = 0.5 + (thread_total_gens - thread_good_gens);
+                    double ib_mid = incbeta(alpha, beta, GOAL_MID);
+                    if (ib_mid >= CONFIDENCE) { std::unique_lock<std::mutex> lock(mutex); res = -1; done.store(true); return; }
+                    if (1.0 - ib_mid >= CONFIDENCE) { std::unique_lock<std::mutex> lock(mutex); res = 1; done.store(true); return; }
+                    double ib_min = incbeta(alpha, beta, GOAL_MIN);
+                    double ib_max = incbeta(alpha, beta, GOAL_MAX);
+                    if (ib_max - ib_min >= CONFIDENCE) { std::unique_lock<std::mutex> lock(mutex); res = 0; done.store(true); return; }
+                }
+            }
+        });
+    }
+    for (auto& thread : threads) thread.join();
+    assert(res.has_value());
+    fprintf(stderr, "%s (%lu/%lu gens)\n",
+            res.value() == 0 ? "done" : (res.value() == 1 ? "too high" : "too low"),
+            (unsigned long)good_gens,
+            (unsigned long)total_gens);
+    return res.value();
 }
 
 }
