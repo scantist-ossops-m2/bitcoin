@@ -88,7 +88,7 @@ int main(int argc, char** argv) {
     double alpha = strtod(argv[4], nullptr);
 
     RollingCuckooFilter::Params param(gen_size, gen_cbits, fpbits, alpha, 0);
-    fprintf(stderr, "# buckets=%lu gens=%lu gen_size=%lu gen_bits=%lu fpr_bits=%lu table_bits=%llu alpha=%f\n", (unsigned long)param.m_buckets, (unsigned long)param.Generations(), (unsigned long)param.m_gen_size, (unsigned long)param.m_gen_cbits, (unsigned long)param.m_fpr_bits, (unsigned long long)param.TableBits(), param.Alpha());
+    fprintf(stderr, "# buckets=%lu gens=%lu gen_size=%lu gen_bits=%lu fpr_bits=%lu table_bits=%llu reqalpha=%f alpha=%f\n", (unsigned long)param.m_buckets, (unsigned long)param.Generations(), (unsigned long)param.m_gen_size, (unsigned long)param.m_gen_cbits, (unsigned long)param.m_fpr_bits, (unsigned long long)param.TableBits(), alpha, param.Alpha());
 
     uint32_t low = 0;
     uint32_t high = 1;
@@ -119,6 +119,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    printf("alpha=%f cbits=%u fpbits=%u gensize=%lu: maxiter=%lu effalpha=%f gens=%u buckets=%lu fprbits=%u tablebits=%llu\n", alpha, gen_cbits, fpbits, (unsigned long)gen_size, (unsigned long)high, param.Alpha(), (unsigned)param.Generations(), (unsigned long)param.m_buckets, (unsigned)param.m_fpr_bits, (unsigned long long)param.TableBits());
+    printf("# buckets=%lu gens=%lu gen_size=%lu gen_bits=%lu fpr_bits=%lu table_bits=%llu reqalpha=%f alpha=%f result=%lu\n", (unsigned long)param.m_buckets, (unsigned long)param.Generations(), (unsigned long)param.m_gen_size, (unsigned long)param.m_gen_cbits, (unsigned long)param.m_fpr_bits, (unsigned long long)param.TableBits(), alpha, param.Alpha(), (unsigned long)high);
     return 0;
 }
