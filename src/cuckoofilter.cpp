@@ -64,7 +64,6 @@ public:
         }
     }
 
-/*
     void Selftest() const {
         for (uint32_t a = 0; a < 2 * M; ++a) {
             for (uint32_t b = 0; b < M; ++b) {
@@ -81,11 +80,19 @@ public:
             }
         }
     }
-*/
 
     static constexpr unsigned Range() { return M; }
     static constexpr unsigned Bits() { return BITS; }
 };
+
+constexpr GenerationCoder<5, 2, uint8_t, uint8_t> ENCODER_5;
+constexpr GenerationCoder<7, 3, uint8_t, uint8_t> ENCODER_7;
+constexpr GenerationCoder<8, 4, uint8_t, uint8_t> ENCODER_8;
+constexpr GenerationCoder<9, 5, uint8_t, uint8_t> ENCODER_9;
+constexpr GenerationCoder<10, 6, uint8_t, uint8_t> ENCODER_10;
+constexpr GenerationCoder<11, 8, uint16_t, uint8_t> ENCODER_11;
+constexpr GenerationCoder<12, 9, uint16_t, uint8_t> ENCODER_12;
+constexpr GenerationCoder<13, 11, uint16_t, uint8_t> ENCODER_13;
 
 /** Coder that packs (a=0..27, b=0..13, c=0..13-b, d=0..13-b-c) in 14 bits. */
 constexpr GenerationCoder<14, 14, uint16_t, uint8_t> ENCODER_14;
@@ -100,10 +107,17 @@ constexpr GenerationCoder<41, 20, uint16_t, uint16_t> ENCODER_20;
 /** Coder that packs (a=0..97, b=0..48, c=0..48-b, d=0..48-b-c) in 21 bits. */
 constexpr GenerationCoder<49, 21, uint16_t, uint16_t> ENCODER_21;
 
-/*
 class Checker {
 public:
     Checker() {
+        ENCODER_5.Selftest();
+        ENCODER_7.Selftest();
+        ENCODER_8.Selftest();
+        ENCODER_9.Selftest();
+        ENCODER_10.Selftest();
+        ENCODER_11.Selftest();
+        ENCODER_12.Selftest();
+        ENCODER_13.Selftest();
         ENCODER_14.Selftest();
         ENCODER_16.Selftest();
         ENCODER_17.Selftest();
@@ -113,11 +127,18 @@ public:
     }
 };
 static Checker checker;
-*/
 
 unsigned Generations(unsigned gen_cbits)
 {
     switch (gen_cbits) {
+    case 5: return ENCODER_5.Range();
+    case 7: return ENCODER_7.Range();
+    case 8: return ENCODER_8.Range();
+    case 9: return ENCODER_9.Range();
+    case 10: return ENCODER_10.Range();
+    case 11: return ENCODER_11.Range();
+    case 12: return ENCODER_12.Range();
+    case 13: return ENCODER_13.Range();
     case 14: return ENCODER_14.Range();
     case 16: return ENCODER_16.Range();
     case 17: return ENCODER_17.Range();
@@ -131,6 +152,14 @@ unsigned Generations(unsigned gen_cbits)
 uint32_t Encode(const std::array<uint32_t, 4>& data, unsigned compressed_bits)
 {
     switch (compressed_bits) {
+    case 5: return ENCODER_5.Encode(data[0], data[1], data[2], data[3]);
+    case 7: return ENCODER_7.Encode(data[0], data[1], data[2], data[3]);
+    case 8: return ENCODER_8.Encode(data[0], data[1], data[2], data[3]);
+    case 9: return ENCODER_9.Encode(data[0], data[1], data[2], data[3]);
+    case 10: return ENCODER_10.Encode(data[0], data[1], data[2], data[3]);
+    case 11: return ENCODER_11.Encode(data[0], data[1], data[2], data[3]);
+    case 12: return ENCODER_12.Encode(data[0], data[1], data[2], data[3]);
+    case 13: return ENCODER_13.Encode(data[0], data[1], data[2], data[3]);
     case 14: return ENCODER_14.Encode(data[0], data[1], data[2], data[3]);
     case 16: return ENCODER_16.Encode(data[0], data[1], data[2], data[3]);
     case 17: return ENCODER_17.Encode(data[0], data[1], data[2], data[3]);
@@ -144,6 +173,14 @@ uint32_t Encode(const std::array<uint32_t, 4>& data, unsigned compressed_bits)
 std::array<uint32_t, 4> Decode(uint32_t v, unsigned compressed_bits)
 {
     switch (compressed_bits) {
+    case 5: return ENCODER_5.Decode(v);
+    case 7: return ENCODER_7.Decode(v);
+    case 8: return ENCODER_8.Decode(v);
+    case 9: return ENCODER_9.Decode(v);
+    case 10: return ENCODER_10.Decode(v);
+    case 11: return ENCODER_11.Decode(v);
+    case 12: return ENCODER_12.Decode(v);
+    case 13: return ENCODER_13.Decode(v);
     case 14: return ENCODER_14.Decode(v);
     case 16: return ENCODER_16.Decode(v);
     case 17: return ENCODER_17.Decode(v);
