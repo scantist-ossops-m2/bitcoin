@@ -6,9 +6,9 @@
 #include <mutex>
 #include <optional>
 
-static constexpr double CONFIDENCE = 0.9999;
-static constexpr double GOAL_MIN = 0.899;
-static constexpr double GOAL_MAX = 0.901;
+static constexpr double CONFIDENCE = 0.9999999;
+static constexpr double GOAL_MIN = 0.8999;
+static constexpr double GOAL_MAX = 0.9001;
 static constexpr double GOAL_MID = (GOAL_MIN + GOAL_MAX) * 0.5;
 static constexpr int GOAL_AIM = 2;
 static constexpr int THREADS = 30;
