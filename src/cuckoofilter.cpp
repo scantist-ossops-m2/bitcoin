@@ -85,14 +85,14 @@ public:
     static constexpr unsigned Bits() { return BITS; }
 };
 
-constexpr GenerationCoder<5, 2, uint8_t, uint8_t> ENCODER_5;
-constexpr GenerationCoder<7, 3, uint8_t, uint8_t> ENCODER_7;
-constexpr GenerationCoder<8, 4, uint8_t, uint8_t> ENCODER_8;
-constexpr GenerationCoder<9, 5, uint8_t, uint8_t> ENCODER_9;
-constexpr GenerationCoder<10, 6, uint8_t, uint8_t> ENCODER_10;
-constexpr GenerationCoder<11, 8, uint16_t, uint8_t> ENCODER_11;
-constexpr GenerationCoder<12, 9, uint16_t, uint8_t> ENCODER_12;
-constexpr GenerationCoder<13, 11, uint16_t, uint8_t> ENCODER_13;
+constexpr GenerationCoder<2, 5, uint8_t, uint8_t> ENCODER_5;
+constexpr GenerationCoder<3, 7, uint8_t, uint8_t> ENCODER_7;
+constexpr GenerationCoder<4, 8, uint8_t, uint8_t> ENCODER_8;
+constexpr GenerationCoder<5, 9, uint8_t, uint8_t> ENCODER_9;
+constexpr GenerationCoder<6, 10, uint8_t, uint8_t> ENCODER_10;
+constexpr GenerationCoder<8, 11, uint8_t, uint8_t> ENCODER_11;
+constexpr GenerationCoder<9, 12, uint8_t, uint8_t> ENCODER_12;
+constexpr GenerationCoder<11, 13, uint16_t, uint8_t> ENCODER_13;
 
 /** Coder that packs (a=0..27, b=0..13, c=0..13-b, d=0..13-b-c) in 14 bits. */
 constexpr GenerationCoder<14, 14, uint16_t, uint8_t> ENCODER_14;
