@@ -191,7 +191,7 @@ std::array<uint32_t, 4> Decode(uint32_t v, unsigned compressed_bits)
     assert(false);
 }
 
-RollingCuckooFilter::Params ChooseParams(uint32_t window, unsigned fpbits, double alpha, int max_access)
+RollingCuckooFilter::Params ChooseParams(uint32_t window, unsigned fpbits, double alpha, uint64_t max_access_q32)
 {
     static constexpr unsigned GEN_CBITS[] = {14, 16, 17, 18, 20, 21};
     bool have_ret = false;
@@ -217,16 +217,16 @@ RollingCuckooFilter::Params ChooseParams(uint32_t window, unsigned fpbits, doubl
         }
     }
     assert(have_ret);
-    if (max_access) {
-        ret.m_max_kicks = max_access;
+    if (max_access_q32) {
+        ret.m_max_access_q32 = max_access_q32;
     } else {
         double real_alpha = ret.Alpha();
         if (real_alpha < 0.850001) {
-            ret.m_max_kicks = std::ceil(std::max(16.0, 2.884501 * std::log(window) - 2.0));
+            ret.m_max_access_q32 = std::ceil(std::max(16.0, 2.884501 * std::log(window) - 2.0)) * (1ULL << 32);
         } else if (real_alpha < 0.900001) {
-            ret.m_max_kicks = std::ceil(std::max(29.0, 5.104926 * std::log(window) - 5.0));
+            ret.m_max_access_q32 = std::ceil(std::max(29.0, 5.104926 * std::log(window) - 5.0)) * (1ULL << 32);
         } else if (real_alpha < 0.950001) {
-            ret.m_max_kicks = std::ceil(std::max(125.0, 18.75451 * std::log(window) - 25.0));
+            ret.m_max_access_q32 = std::ceil(std::max(125.0, 18.75451 * std::log(window) - 25.0)) * (1ULL << 32);
         }
     }
     return ret;
@@ -246,8 +246,8 @@ bool RollingCuckooFilter::IsActive(uint32_t gen) const
     return false;
 }
 
-RollingCuckooFilter::RollingCuckooFilter(uint32_t window, unsigned fpbits, double alpha, int max_access, bool deterministic) :
-    RollingCuckooFilter(ChooseParams(window, fpbits, alpha, max_access), deterministic) {}
+RollingCuckooFilter::RollingCuckooFilter(uint32_t window, unsigned fpbits, double alpha, uint64_t max_access_q32, bool deterministic) :
+    RollingCuckooFilter(ChooseParams(window, fpbits, alpha, max_access_q32), deterministic) {}
 
 RollingCuckooFilter::RollingCuckooFilter(const Params& params, bool deterministic) :
     m_params(params),
@@ -516,7 +516,15 @@ void RollingCuckooFilter::Insert(Span<const unsigned char> data)
     ++m_count_this_cycle;
     ++m_count_this_gen;
 
-    int max_access = m_params.m_max_kicks;
+    int max_access = m_params.m_max_access_q32 >> 32;
+    if (m_params.m_max_access_q32 & 0xFFFFFFFF) {
+        static_assert(sizeof(unsigned long) == 8);
+        int shift = __builtin_clzl(m_params.m_max_access_q32);
+        uint32_t val = m_rng.randbits(32 - shift) << shift;
+        if (val < (m_params.m_max_access_q32 & 0xFFFFFFFF)) {
+            max_access++;
+        }
+    }
     --max_access;
     int fnd1 = Find(index1, fpr);
     if (fnd1 != -1) {
@@ -579,13 +587,13 @@ void RollingCuckooFilter::Insert(Span<const unsigned char> data)
     m_max_overflow = std::max(m_max_overflow, m_overflow.size());
 }
 
-RollingCuckooFilter::Params::Params(uint32_t gen_size, unsigned gen_cbits, unsigned fp_bits, double alpha, unsigned max_kicks)
+RollingCuckooFilter::Params::Params(uint32_t gen_size, unsigned gen_cbits, unsigned fp_bits, double alpha, uint64_t max_access_q32)
 {
     m_gen_size = gen_size;
     m_gen_cbits = gen_cbits;
     unsigned gens = Generations();
     assert(fp_bits >= 10 && fp_bits <= 50);
     m_fpr_bits = fp_bits + 3;
-    m_max_kicks = max_kicks;
+    m_max_access_q32 = max_access_q32;
     m_buckets = ((size_t)std::ceil((uint64_t)m_gen_size * gens / (alpha * BUCKET_SIZE * 2))) << 1;
 }

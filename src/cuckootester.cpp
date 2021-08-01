@@ -6,19 +6,20 @@
 #include <mutex>
 #include <optional>
 
-static constexpr double CONFIDENCE = 0.9999999;
-static constexpr double GOAL_MIN = 0.8999;
-static constexpr double GOAL_MAX = 0.9001;
-static constexpr double GOAL_MID = (GOAL_MIN + GOAL_MAX) * 0.5;
+static constexpr double CONFIDENCE_SIDE = 0.999;
+static constexpr double CONFIDENCE_MID = 0.999999;
+static constexpr double GOAL_LOW = 0.8999;
+static constexpr double GOAL_HIGH = 0.9001;
+static constexpr double GOAL_MID = 0.9;
 static constexpr int GOAL_AIM = 2;
 static constexpr int THREADS = 30;
 
 namespace {
 
-int Test(RollingCuckooFilter::Params param, uint32_t max_access) {
-    param.m_max_kicks = max_access;
+int Test(RollingCuckooFilter::Params param, uint64_t max_access_q32) {
+    param.m_max_access_q32 = max_access_q32;
 
-    fprintf(stderr, "Testing max_access = %lu ...", (unsigned long)max_access);
+    fprintf(stderr, "Testing max_access = %.10f ...", max_access_q32 * 0.00000000023283064365386962890625);
     std::vector<std::thread> threads;
     threads.reserve(THREADS);
     std::mutex mutex;
@@ -57,11 +58,11 @@ int Test(RollingCuckooFilter::Params param, uint32_t max_access) {
                     double alpha = 0.5 + thread_good_gens;
                     double beta = 0.5 + (thread_total_gens - thread_good_gens);
                     double ib_mid = incbeta(alpha, beta, GOAL_MID);
-                    if (ib_mid >= CONFIDENCE) { std::unique_lock<std::mutex> lock(mutex); res = -1; done.store(true); return; }
-                    if (1.0 - ib_mid >= CONFIDENCE) { std::unique_lock<std::mutex> lock(mutex); res = 1; done.store(true); return; }
-                    double ib_min = incbeta(alpha, beta, GOAL_MIN);
-                    double ib_max = incbeta(alpha, beta, GOAL_MAX);
-                    if (ib_max - ib_min >= CONFIDENCE) { std::unique_lock<std::mutex> lock(mutex); res = 0; done.store(true); return; }
+                    if (ib_mid >= CONFIDENCE_SIDE) { std::unique_lock<std::mutex> lock(mutex); res = -1; done.store(true); return; }
+                    if (1.0 - ib_mid >= CONFIDENCE_SIDE) { std::unique_lock<std::mutex> lock(mutex); res = 1; done.store(true); return; }
+                    double ib_min = incbeta(alpha, beta, GOAL_LOW);
+                    double ib_max = incbeta(alpha, beta, GOAL_HIGH);
+                    if (ib_max - ib_min >= CONFIDENCE_MID) { std::unique_lock<std::mutex> lock(mutex); res = 0; done.store(true); return; }
                 }
             }
         });
@@ -69,7 +70,7 @@ int Test(RollingCuckooFilter::Params param, uint32_t max_access) {
     for (auto& thread : threads) thread.join();
     assert(res.has_value());
     fprintf(stderr, "%s (%lu/%lu gens)\n",
-            res.value() == 0 ? "done" : (res.value() == 1 ? "too high" : "too low"),
+            res.value() == 0 ? "center" : (res.value() == 1 ? "too high" : "too low"),
             (unsigned long)good_gens,
             (unsigned long)total_gens);
     return res.value();
@@ -90,8 +91,8 @@ int main(int argc, char** argv) {
     RollingCuckooFilter::Params param(gen_size, gen_cbits, fpbits, alpha, 0);
     fprintf(stderr, "# buckets=%lu gens=%lu gen_size=%lu gen_bits=%lu fpr_bits=%lu table_bits=%llu reqalpha=%f alpha=%f\n", (unsigned long)param.m_buckets, (unsigned long)param.Generations(), (unsigned long)param.m_gen_size, (unsigned long)param.m_gen_cbits, (unsigned long)param.m_fpr_bits, (unsigned long long)param.TableBits(), alpha, param.Alpha());
 
-    uint32_t low = 0;
-    uint32_t high = 1;
+    uint64_t low = 0x100000000;
+    uint64_t high = 0x200000000;
     do {
         int res = Test(param, high);
         if (res == 0) {
@@ -106,19 +107,21 @@ int main(int argc, char** argv) {
         }
     } while(1);
 
-    while (high > low + 1) {
-        uint32_t mid = (low + high) >> 1;
+    while (high > low + ((high + low) >> 17)) {
+        uint64_t mid = (low + high) >> 1;
+        uint64_t dif = (high - low);
         int res = Test(param, mid);
         if (res == 0) {
-            low = mid-1;
-            high = mid;
+            break;
         } else if (res == 1) {
-            high = mid;
+            high -= (dif >> 2);
         } else {
-            low = mid;
+            low += (dif >> 2);
         }
     }
 
-    printf("# buckets=%lu gens=%lu gen_size=%lu gen_bits=%lu fpr_bits=%lu table_bits=%llu reqalpha=%f alpha=%f result=%lu\n", (unsigned long)param.m_buckets, (unsigned long)param.Generations(), (unsigned long)param.m_gen_size, (unsigned long)param.m_gen_cbits, (unsigned long)param.m_fpr_bits, (unsigned long long)param.TableBits(), alpha, param.Alpha(), (unsigned long)high);
+    uint64_t result = (high + low) >> 1;
+
+    printf("# buckets=%lu gens=%lu gen_size=%lu gen_bits=%lu fpr_bits=%lu table_bits=%llu reqalpha=%f alpha=%f result=%.10f\n", (unsigned long)param.m_buckets, (unsigned long)param.Generations(), (unsigned long)param.m_gen_size, (unsigned long)param.m_gen_cbits, (unsigned long)param.m_fpr_bits, (unsigned long long)param.TableBits(), alpha, param.Alpha(), result * 0.00000000023283064365386962890625);
     return 0;
 }

@@ -31,7 +31,7 @@ public:
         //! Number of fingerprint bits per entry.
         unsigned m_fpr_bits;
         //! Maximum number of kicks performed when inserting, before resorting to overflow table.
-        unsigned m_max_kicks;
+        uint64_t m_max_access_q32;
 
         //! Implied number of active generations.
         unsigned Generations() const;
@@ -50,7 +50,7 @@ public:
 
         Params() = default;
         Params(const Params&) = default;
-        Params(uint32_t gen_size, unsigned gen_cbits, unsigned fpr_bits, double alpha, unsigned max_kicks);
+        Params(uint32_t gen_size, unsigned gen_cbits, unsigned fpr_bits, double alpha, uint64_t max_access_q32);
     };
 
 private:
@@ -134,14 +134,14 @@ private:
     //! Store (fpr,gen) in bucket index1 or index2; otherwise kick until space is found; as a last resort, store in overflow map.
     //! Bucket must be preloaded with the contents of position index1. max_access is the maximum number of buckets that are allowed
     //! to be accessed before giving up. The return value is max_access-(number of accessed buckets).
-    int AddEntry(DecodedBucket& bucket, uint32_t index1, uint32_t index2, uint64_t fpr, unsigned gen, int max_access);
+    int AddEntry(DecodedBucket& bucket, uint32_t index1, uint32_t index2, uint64_t fpr, unsigned gen, int access);
 
 public:
     //! Construct a rolling cuckoo filter with the specified parameters.
     RollingCuckooFilter(const Params& param, bool deterministic);
 
     //! Construct a rolling cuckoo filter, choosing parameters automatically.
-    RollingCuckooFilter(uint32_t window, unsigned fpbits, double alpha, int max_access = 0, bool deterministic = false);
+    RollingCuckooFilter(uint32_t window, unsigned fpbits, double alpha, uint64_t max_access_q32 = 0, bool deterministic = false);
 
     //! Check if data is present.
     bool Check(Span<const unsigned char> data) const;
