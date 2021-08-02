@@ -8,8 +8,8 @@
 
 static constexpr double CONFIDENCE_SIDE = 0.999;
 static constexpr double CONFIDENCE_MID = 0.999999;
-static constexpr double GOAL_LOW = 0.8999;
-static constexpr double GOAL_HIGH = 0.9001;
+static constexpr double GOAL_LOW = 0.8995;
+static constexpr double GOAL_HIGH = 0.9005;
 static constexpr double GOAL_MID = 0.9;
 static constexpr int GOAL_AIM = 2;
 static constexpr int THREADS = 30;
@@ -108,7 +108,7 @@ int main(int argc, char** argv) {
         }
     } while(1);
 
-    while (high > low + ((high + low) >> 17)) {
+    while (high > low + (0xFFFFFFFF >> 2)) {
         uint64_t mid = (low + high) >> 1;
         uint64_t dif = (high - low);
         int res = Test(param, mid);
