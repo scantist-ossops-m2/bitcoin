@@ -516,10 +516,11 @@ void RollingCuckooFilter::Insert(Span<const unsigned char> data)
     ++m_count_this_cycle;
     ++m_count_this_gen;
 
+
     int max_access = m_params.m_max_access_q32 >> 32;
     if (m_params.m_max_access_q32 & 0xFFFFFFFF) {
         static_assert(sizeof(unsigned long) == 8);
-        int shift = __builtin_clzl(m_params.m_max_access_q32);
+        int shift = __builtin_ctzl(m_params.m_max_access_q32);
         uint32_t val = m_rng.randbits(32 - shift) << shift;
         if (val < (m_params.m_max_access_q32 & 0xFFFFFFFF)) {
             max_access++;
