@@ -253,7 +253,6 @@ BITCOIN_CORE_H = \
   util/golombrice.h \
   util/hash_type.h \
   util/hasher.h \
-  util/incbeta.h \
   util/int_utils.h \
   util/macros.h \
   util/message.h \
@@ -601,7 +600,6 @@ libbitcoin_util_a_SOURCES = \
   util/fees.cpp \
   util/getuniquepath.cpp \
   util/hasher.cpp \
-  util/incbeta.cpp \
   util/sock.cpp \
   util/system.cpp \
   util/message.cpp \

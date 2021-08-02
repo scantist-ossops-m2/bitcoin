@@ -1,10 +1,10 @@
 #include <cuckoofilter.h>
-#include <util/incbeta.h>
 #include <stdlib.h>
 #include <thread>
 #include <atomic>
 #include <mutex>
 #include <optional>
+#include <boost/math/special_functions/beta.hpp>
 
 static constexpr double CONFIDENCE_SIDE = 0.999;
 static constexpr double CONFIDENCE_MID = 0.999999;
@@ -57,11 +57,11 @@ int Test(RollingCuckooFilter::Params param, uint64_t max_access_q32) {
                 if (total_gens > 30) {
                     double alpha = 0.5 + thread_good_gens;
                     double beta = 0.5 + (thread_total_gens - thread_good_gens);
-                    double ib_mid = incbeta(alpha, beta, GOAL_MID);
+                    double ib_mid = boost::math::ibeta(alpha, beta, GOAL_MID);
                     if (ib_mid >= CONFIDENCE_SIDE) { std::unique_lock<std::mutex> lock(mutex); res = -1; done.store(true); return; }
                     if (1.0 - ib_mid >= CONFIDENCE_SIDE) { std::unique_lock<std::mutex> lock(mutex); res = 1; done.store(true); return; }
-                    double ib_min = incbeta(alpha, beta, GOAL_LOW);
-                    double ib_max = incbeta(alpha, beta, GOAL_HIGH);
+                    double ib_min = boost::math::ibeta(alpha, beta, GOAL_LOW);
+                    double ib_max = boost::math::ibeta(alpha, beta, GOAL_HIGH);
                     if (ib_max - ib_min >= CONFIDENCE_MID) { std::unique_lock<std::mutex> lock(mutex); res = 0; done.store(true); return; }
                 }
             }
@@ -69,10 +69,11 @@ int Test(RollingCuckooFilter::Params param, uint64_t max_access_q32) {
     }
     for (auto& thread : threads) thread.join();
     assert(res.has_value());
-    fprintf(stderr, "%s (%lu/%lu gens)\n",
+    fprintf(stderr, "%s (%lu/%lu gens = %f)\n",
             res.value() == 0 ? "center" : (res.value() == 1 ? "too high" : "too low"),
             (unsigned long)good_gens,
-            (unsigned long)total_gens);
+            (unsigned long)total_gens,
+            (double)good_gens / total_gens);
     return res.value();
 }
 
