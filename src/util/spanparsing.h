@@ -47,4 +47,45 @@ std::vector<Span<const char>> Split(const Span<const char>& sp, char sep);
 
 } // namespace spanparsing
 
+namespace genspanparsing {
+
+struct NoValue {};
+
+template<typename In, typename Out> using Parser = std::function<std::function<void()>(Span<const In>, std::function<void(std::optional<Out>)>)>;
+
+namespace detail {
+
+
+} // namespace genspanparsing::detail
+
+template<typename In, typename Out> std::optional<Out> Parse(Parser<In,Out> parser, Span<const In> input)
+{
+    std::optional<Out> ret;
+    std::function<void()> todo = [input,&parser](){parser(input, [&ret](std::optional<Out> res){ ret = std::move(res); });}
+    while (todo) {
+        todo = todo();
+    }
+    return ret;
+}
+
+template<typename In> 
+Parser<In, NoValue> Const(Span<const In> cte) {
+    return [cte](Span<const In> arg, std::function<void(std::optional<NoValue>)> cb){
+        if (arg.size() < cte.size() || arg.subspan(0, cte.size()) != cte) {
+            return [cb=std::move(cb)](){cb(std::nullopt);};
+        } else {
+            return [cb=std::move(cb)](){cb(NoValue{});};
+        }
+    };
+}
+
+template<typename In, typename Out>
+Parser<In, std::vector<Out>> Repeat(Parser<In, Out> parser, Span<const In> sep){
+    return [parser=std::move(parser),sep](Span<const In> arg, std::function<void(std::optional<NoValue>)> cb){
+        
+    }
+}
+
+} // namespace genspanparsing
+
 #endif // BITCOIN_UTIL_SPANPARSING_H
