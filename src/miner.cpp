@@ -431,6 +431,7 @@ void BlockAssembler::addPackageTxs(int &nPackagesSelected, int &nDescendantsUpda
         }
 
         ++nPackagesSelected;
+        size_per_feerate[CFeeRate{packageFees, packageSize}] += packageSize;
 
         // Update transactions that depend on each of these
         nDescendantsUpdated += UpdatePackagesForAdded(ancestors, mapModifiedTx);
@@ -454,4 +455,18 @@ void IncrementExtraNonce(CBlock* pblock, const CBlockIndex* pindexPrev, unsigned
 
     pblock->vtx[0] = MakeTransactionRef(std::move(txCoinbase));
     pblock->hashMerkleRoot = BlockMerkleRoot(*pblock);
+}
+
+std::map<CFeeRate, uint64_t> BlockAssembler::GetFeeRateStats()
+{
+    return std::move(size_per_feerate);
+}
+
+std::map<CFeeRate, uint64_t> GetMempoolHistogram(CChainState& chainstate, const CTxMemPool& mempool, const CChainParams& params)
+{
+    BlockAssembler::Options options;
+    options.nBlockMaxWeight = std::nullopt;
+    BlockAssembler assembler(chainstate, mempool, params, options);
+    assembler.CreateNewBlock(CScript{});
+    return assembler.GetFeeRateStats();
 }

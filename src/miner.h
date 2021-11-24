@@ -140,6 +140,7 @@ private:
     uint64_t nBlockSigOpsCost;
     CAmount nFees;
     CTxMemPool::setEntries inBlock;
+    std::map<CFeeRate, uint64_t> size_per_feerate;
 
     // Chain context for the block
     int nHeight;
@@ -163,6 +164,10 @@ public:
 
     inline static std::optional<int64_t> m_last_block_num_txs{};
     inline static std::optional<int64_t> m_last_block_weight{};
+
+    /** Return a map from feerates to vbyte, indicating how many vbytes were
+     *  included in the block at which feerate. This can only be called once. */
+    std::map<CFeeRate, uint64_t> GetFeeRateStats();
 
 private:
     // utility functions
@@ -196,6 +201,7 @@ private:
       * state updated assuming given transactions are inBlock. Returns number
       * of updated descendants. */
     int UpdatePackagesForAdded(const CTxMemPool::setEntries& alreadyAdded, indexed_modified_transaction_set& mapModifiedTx) EXCLUSIVE_LOCKS_REQUIRED(m_mempool.cs);
+
 };
 
 /** Modify the extranonce in a block */
@@ -204,5 +210,8 @@ int64_t UpdateTime(CBlockHeader* pblock, const Consensus::Params& consensusParam
 
 /** Update an old GenerateCoinbaseCommitment from CreateNewBlock after the block txs have changed */
 void RegenerateCommitments(CBlock& block, ChainstateManager& chainman);
+
+/** Get feerate statistics for the whole mempool. */
+std::map<CFeeRate, uint64_t> GetMempoolHistogram(CChainState& chainstate, const CTxMemPool& mempool, const CChainParams& params);
 
 #endif // BITCOIN_MINER_H
