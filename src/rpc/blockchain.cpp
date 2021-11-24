@@ -18,6 +18,7 @@
 #include <hash.h>
 #include <index/blockfilterindex.h>
 #include <index/coinstatsindex.h>
+#include <miner.h>
 #include <node/blockstorage.h>
 #include <node/coinstats.h>
 #include <node/context.h>
@@ -1701,6 +1702,45 @@ static RPCHelpMan getmempoolinfo()
     };
 }
 
+static RPCHelpMan getmempoolhistogram()
+{
+    return RPCHelpMan{"getmempoolhistogram",
+                "\nReturns mempool histogram statistics.\n",
+                {},
+                RPCResult{
+                    RPCResult::Type::ARR, "", "",
+                    {
+                        {RPCResult::Type::NUM, "feerate", "The feerate (in BTC/kvb)"},
+                        {RPCResult::Type::NUM, "vsize", "Number of vbytes at that feerate"},
+                    }},
+                RPCExamples{
+                    HelpExampleCli("getmempoolhistogram", "")
+            + HelpExampleRpc("getmempoolhistogram", "")
+                },
+        [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
+{
+    std::map<CFeeRate, uint64_t> stats;
+
+    {
+        NodeContext& node = EnsureAnyNodeContext(request.context);
+        const CTxMemPool& mempool = EnsureMemPool(node);
+        ChainstateManager& chainman = EnsureChainman(node);
+        LOCK2(cs_main, mempool.cs);
+        stats = GetMempoolHistogram(chainman.ActiveChainstate(), mempool, Params());
+    }
+
+    UniValue ret(UniValue::VARR);
+    for (const auto& item : stats) {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("feerate", ValueFromAmount(item.first.GetFee(1000)));
+        obj.pushKV("vsize", item.second);
+        ret.push_back(std::move(obj));
+    }
+    return ret;
+},
+    };
+}
+
 static RPCHelpMan preciousblock()
 {
     return RPCHelpMan{"preciousblock",
@@ -2668,6 +2708,7 @@ static const CRPCCommand commands[] =
     { "blockchain",         &getmempooldescendants,              },
     { "blockchain",         &getmempoolentry,                    },
     { "blockchain",         &getmempoolinfo,                     },
+    { "blockchain",         &getmempoolhistogram,                },
     { "blockchain",         &getrawmempool,                      },
     { "blockchain",         &gettxout,                           },
     { "blockchain",         &gettxoutsetinfo,                    },
