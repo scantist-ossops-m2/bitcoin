@@ -131,7 +131,7 @@ private:
 
     // Configuration parameters for the block size
     bool fIncludeWitness;
-    unsigned int nBlockMaxWeight;
+    std::optional<unsigned int> nBlockMaxWeight;
     CFeeRate blockMinFeeRate;
 
     // Information on the current status of the block
@@ -151,7 +151,7 @@ private:
 public:
     struct Options {
         Options();
-        size_t nBlockMaxWeight;
+        std::optional<size_t> nBlockMaxWeight; /* nullopt for unlimited */
         CFeeRate blockMinFeeRate;
     };
 
