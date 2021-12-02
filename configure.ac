@@ -21,7 +21,7 @@ AC_PATH_TOOL(STRIP, strip)
 
 # Save definition of AC_PROG_CC because AM_PROG_CC_C_O in automake<=1.13 will
 # redefine AC_PROG_CC to exit with an error, which avoids the user calling it
-# accidently and screwing up the effect of AM_PROG_CC_C_O. However, we'll need
+# accidentally and screwing up the effect of AM_PROG_CC_C_O. However, we'll need
 # AC_PROG_CC later on in AX_PROG_CC_FOR_BUILD, where its usage is fine, and
 # we'll carefully make sure not to call AC_PROG_CC anywhere else.
 m4_copy([AC_PROG_CC], [saved_AC_PROG_CC])
@@ -43,14 +43,8 @@ case $host_os in
          # These Homebrew packages may be keg-only, meaning that they won't be found
          # in expected paths because they may conflict with system files. Ask
          # Homebrew where each one is located, then adjust paths accordingly.
-         openssl_prefix=`$BREW --prefix openssl 2>/dev/null`
-         valgrind_prefix=`$BREW --prefix valgrind 2>/dev/null`
-         if test x$openssl_prefix != x; then
-           PKG_CONFIG_PATH="$openssl_prefix/lib/pkgconfig:$PKG_CONFIG_PATH"
-           export PKG_CONFIG_PATH
-           CRYPTO_CPPFLAGS="-I$openssl_prefix/include"
-         fi
-         if test x$valgrind_prefix != x; then
+         if $BREW list --versions valgrind >/dev/null; then
+           valgrind_prefix=`$BREW --prefix valgrind 2>/dev/null`
            VALGRIND_CPPFLAGS="-I$valgrind_prefix/include"
          fi
        else
@@ -121,11 +115,6 @@ AC_ARG_ENABLE(tests,
     [use_tests=$enableval],
     [use_tests=yes])
 
-AC_ARG_ENABLE(openssl_tests,
-    AS_HELP_STRING([--enable-openssl-tests],[enable OpenSSL tests [default=auto]]),
-    [enable_openssl_tests=$enableval],
-    [enable_openssl_tests=auto])
-
 AC_ARG_ENABLE(experimental,
     AS_HELP_STRING([--enable-experimental],[allow experimental configure options [default=no]]),
     [use_experimental=$enableval],
@@ -171,12 +160,14 @@ AC_ARG_ENABLE(external_default_callbacks,
 AC_ARG_WITH([test-override-wide-multiply], [] ,[set_widemul=$withval], [set_widemul=auto])
 
 AC_ARG_WITH([asm], [AS_HELP_STRING([--with-asm=x86_64|arm|no|auto],
-[assembly optimizations to use (experimental: arm) [default=auto]])],[req_asm=$withval], [req_asm=auto])
+[assembly optimizations to use (experimental: arm) [default=auto]])],[req_asm=$withval], [req_asm=auto])
 
 AC_ARG_WITH([ecmult-window], [AS_HELP_STRING([--with-ecmult-window=SIZE|auto],
 [window size for ecmult precomputation for verification, specified as integer in range [2..24].]
 [Larger values result in possibly better performance at the cost of an exponentially larger precomputed table.]
 [The table will store 2^(SIZE-1) * 64 bytes of data but can be larger in memory due to platform-specific padding and alignment.]
+[A window size larger than 15 will require you delete the prebuilt ecmult_static_pre_g.h file so that it can be rebuilt.]
+[For very large window sizes, use "make -j 1" to reduce memory use during compilation.]
 ["auto" is a reasonable setting for desktop machines (currently 15). [default=auto]]
 )],
 [req_ecmult_window=$withval], [req_ecmult_window=auto])
@@ -326,32 +317,6 @@ case $set_ecmult_gen_precision in
   AC_MSG_ERROR(['ecmult gen precision not 2, 4, 8 or "auto"'])
   ;;
 esac
-
-if test x"$use_tests" = x"yes"; then
-  SECP_OPENSSL_CHECK
-  if test x"$enable_openssl_tests" != x"no" && test x"$has_openssl_ec" = x"yes"; then
-      enable_openssl_tests=yes
-      AC_DEFINE(ENABLE_OPENSSL_TESTS, 1, [Define this symbol if OpenSSL EC functions are available])
-      SECP_TEST_INCLUDES="$SSL_CFLAGS $CRYPTO_CFLAGS $CRYPTO_CPPFLAGS"
-      SECP_TEST_LIBS="$CRYPTO_LIBS"
-
-      case $host in
-      *mingw*)
-        SECP_TEST_LIBS="$SECP_TEST_LIBS -lgdi32"
-        ;;
-      esac
-  else
-    if test x"$enable_openssl_tests" = x"yes"; then
-      AC_MSG_ERROR([OpenSSL tests requested but OpenSSL with EC support is not available])
-    fi
-    enable_openssl_tests=no
-  fi
-else
-  if test x"$enable_openssl_tests" = x"yes"; then
-    AC_MSG_ERROR([OpenSSL tests requested but tests are not enabled])
-  fi
-  enable_openssl_tests=no
-fi
 
 if test x"$enable_valgrind" = x"yes"; then
   SECP_INCLUDES="$SECP_INCLUDES $VALGRIND_CPPFLAGS"
@@ -517,7 +482,6 @@ echo "  with ecmult precomp     = $set_precomp"
 echo "  with external callbacks = $use_external_default_callbacks"
 echo "  with benchmarks         = $use_benchmark"
 echo "  with tests              = $use_tests"
-echo "  with openssl tests      = $enable_openssl_tests"
 echo "  with coverage           = $enable_coverage"
 echo "  module ecdh             = $enable_module_ecdh"
 echo "  module recovery         = $enable_module_recovery"

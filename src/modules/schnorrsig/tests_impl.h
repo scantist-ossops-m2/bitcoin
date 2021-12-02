@@ -38,7 +38,7 @@ void run_nonce_function_bip340_tests(void) {
     size_t algolen = sizeof(algo);
     secp256k1_sha256 sha;
     secp256k1_sha256 sha_optimized;
-    unsigned char nonce[32];
+    unsigned char nonce[32], nonce_z[32];
     unsigned char msg[32];
     size_t msglen = sizeof(msg);
     unsigned char key[32];
@@ -107,8 +107,11 @@ void run_nonce_function_bip340_tests(void) {
         CHECK(secp256k1_memcmp_var(nonce, nonce2, 32) != 0);
     }
 
-    /* NULL aux_rand argument is allowed. */
+    /* NULL aux_rand argument is allowed, and identical to passing all zero aux_rand. */
+    memset(aux_rand, 0, 32);
+    CHECK(nonce_function_bip340(nonce_z, msg, msglen, key, pk, algo, algolen, &aux_rand) == 1);
     CHECK(nonce_function_bip340(nonce, msg, msglen, key, pk, algo, algolen, NULL) == 1);
+    CHECK(secp256k1_memcmp_var(nonce_z, nonce, 32) == 0);
 }
 
 void test_schnorrsig_api(void) {
@@ -193,22 +196,22 @@ void test_schnorrsig_api(void) {
 
     ecount = 0;
     CHECK(secp256k1_schnorrsig_sign(sign, sig, msg, &keypairs[0], NULL) == 1);
-    CHECK(secp256k1_schnorrsig_verify(none, sig, msg, sizeof(msg), &pk[0]) == 0);
-    CHECK(ecount == 1);
-    CHECK(secp256k1_schnorrsig_verify(sign, sig, msg, sizeof(msg), &pk[0]) == 0);
-    CHECK(ecount == 2);
+    CHECK(secp256k1_schnorrsig_verify(none, sig, msg, sizeof(msg), &pk[0]) == 1);
+    CHECK(ecount == 0);
+    CHECK(secp256k1_schnorrsig_verify(sign, sig, msg, sizeof(msg), &pk[0]) == 1);
+    CHECK(ecount == 0);
     CHECK(secp256k1_schnorrsig_verify(vrfy, sig, msg, sizeof(msg), &pk[0]) == 1);
-    CHECK(ecount == 2);
+    CHECK(ecount == 0);
     CHECK(secp256k1_schnorrsig_verify(vrfy, NULL, msg, sizeof(msg), &pk[0]) == 0);
-    CHECK(ecount == 3);
+    CHECK(ecount == 1);
     CHECK(secp256k1_schnorrsig_verify(vrfy, sig, NULL, sizeof(msg), &pk[0]) == 0);
-    CHECK(ecount == 4);
+    CHECK(ecount == 2);
     CHECK(secp256k1_schnorrsig_verify(vrfy, sig, NULL, 0, &pk[0]) == 0);
-    CHECK(ecount == 4);
+    CHECK(ecount == 2);
     CHECK(secp256k1_schnorrsig_verify(vrfy, sig, msg, sizeof(msg), NULL) == 0);
-    CHECK(ecount == 5);
+    CHECK(ecount == 3);
     CHECK(secp256k1_schnorrsig_verify(vrfy, sig, msg, sizeof(msg), &zero_pk) == 0);
-    CHECK(ecount == 6);
+    CHECK(ecount == 4);
 
     secp256k1_context_destroy(none);
     secp256k1_context_destroy(sign);
@@ -230,7 +233,7 @@ void test_schnorrsig_sha256_tagged(void) {
 
 /* Helper function for schnorrsig_bip_vectors
  * Signs the message and checks that it's the same as expected_sig. */
-void test_schnorrsig_bip_vectors_check_signing(const unsigned char *sk, const unsigned char *pk_serialized, unsigned char *aux_rand, const unsigned char *msg32, const unsigned char *expected_sig) {
+void test_schnorrsig_bip_vectors_check_signing(const unsigned char *sk, const unsigned char *pk_serialized, const unsigned char *aux_rand, const unsigned char *msg32, const unsigned char *expected_sig) {
     unsigned char sig[64];
     secp256k1_keypair keypair;
     secp256k1_xonly_pubkey pk, pk_expected;
