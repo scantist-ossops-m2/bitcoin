@@ -16,12 +16,23 @@
 #include <optional>
 
 
-struct Converter {
+struct Satisfier: BaseSignatureChecker {
     typedef CPubKey Key;
 
-    // Precomputed public keys
+    // Precomputed public keys, and a dummy signature for each of them.
     std::vector<Key> dummy_keys;
     std::map<CKeyID, Key> dummy_keys_map;
+    std::map<Key, std::vector<unsigned char>> dummy_sigs;
+
+    // Precomputed hashes of each kind.
+    std::vector<std::vector<unsigned char>> sha256;
+    std::vector<std::vector<unsigned char>> ripemd160;
+    std::vector<std::vector<unsigned char>> hash256;
+    std::vector<std::vector<unsigned char>> hash160;
+    std::map<std::vector<unsigned char>, std::vector<unsigned char>> sha256_preimages;
+    std::map<std::vector<unsigned char>, std::vector<unsigned char>> ripemd160_preimages;
+    std::map<std::vector<unsigned char>, std::vector<unsigned char>> hash256_preimages;
+    std::map<std::vector<unsigned char>, std::vector<unsigned char>> hash160_preimages;
 
     //! Set the precomputed data.
     void Init() {
@@ -34,6 +45,26 @@ struct Converter {
 
             dummy_keys.push_back(pubkey);
             dummy_keys_map.insert({pubkey.GetID(), pubkey});
+            std::vector<unsigned char> sig;
+            privkey.Sign(uint256S(""), sig);
+            sig.push_back(1); // SIGHASH_ALL
+            dummy_sigs.insert({pubkey, sig});
+
+            std::vector<unsigned char> hash;
+            hash.resize(32);
+            CSHA256().Write(keydata, 32).Finalize(hash.data());
+            sha256.push_back(hash);
+            sha256_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            CHash256().Write(keydata).Finalize(hash);
+            hash256.push_back(hash);
+            hash256_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            hash.resize(20);
+            CRIPEMD160().Write(keydata, 32).Finalize(hash.data());
+            ripemd160.push_back(hash);
+            ripemd160_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            CHash160().Write(keydata).Finalize(hash);
+            hash160.push_back(hash);
+            hash160_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
         }
     }
 
@@ -65,13 +96,64 @@ struct Converter {
         key = it->second;
         return true;
     }
+
+    // Timelock challenges satisfaction. Make the value (deterministically) vary to explore different
+    // paths.
+    bool CheckAfter(uint32_t value) const { return value % 2; }
+    bool CheckOlder(uint32_t value) const { return value % 2; }
+
+    // Signature challenges fulfilled with a dummy signate, if it was one of our dummy keys.
+    miniscript::Availability Sign(const CPubKey& key, std::vector<unsigned char>& sig) const {
+        const auto it = dummy_sigs.find(key);
+        if (it == dummy_sigs.end()) return miniscript::Availability::NO;
+        sig = it->second;
+        return miniscript::Availability::YES;
+    }
+
+    //! Lookup generalization for all the hash satisfactions below
+    miniscript::Availability LookupHash(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage,
+                                        const std::map<std::vector<unsigned char>, std::vector<unsigned char>>& map) const
+    {
+        const auto it = map.find(hash);
+        if (it == map.end()) return miniscript::Availability::NO;
+        preimage = it->second;
+        return miniscript::Availability::YES;
+    }
+    miniscript::Availability SatSHA256(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        return LookupHash(hash, preimage, sha256_preimages);
+    }
+    miniscript::Availability SatRIPEMD160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        return LookupHash(hash, preimage, ripemd160_preimages);
+    }
+    miniscript::Availability SatHASH256(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        return LookupHash(hash, preimage, hash256_preimages);
+    }
+    miniscript::Availability SatHASH160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        return LookupHash(hash, preimage, hash160_preimages);
+    }
+
+    // Signature checker methods. Checks the right dummy signature is used. Always assumes timelocks are
+    // correct.
+    bool CheckECDSASignature(const std::vector<unsigned char>& sig, const std::vector<unsigned char>& vchPubKey,
+                             const CScript& scriptCode, SigVersion sigversion) const override
+    {
+        const CPubKey key{vchPubKey};
+        const auto it = dummy_sigs.find(key);
+        if (it == dummy_sigs.end()) return false;
+        return it->second == sig;
+    }
+    bool CheckLockTime(const CScriptNum& nLockTime) const override { return true; }
+    bool CheckSequence(const CScriptNum& nSequence) const override { return true; }
+
 };
 
-Converter CONVERTER;
+Satisfier SATISFIER;
+// A dummy scriptsig to pass to VerifyScript (we always use Segwit v0).
+const CScript DUMMY_SCRIPTSIG;
 
 void initialize_miniscript_decode() {
     ECC_Start();
-    CONVERTER.Init();
+    SATISFIER.Init();
 }
 
 FUZZ_TARGET_INIT(miniscript_decode, initialize_miniscript_decode)
@@ -80,14 +162,35 @@ FUZZ_TARGET_INIT(miniscript_decode, initialize_miniscript_decode)
     const std::optional<CScript> script = ConsumeDeserializable<CScript>(fuzzed_data_provider);
     if (!script) return;
 
-    const auto ms = miniscript::FromScript(*script, CONVERTER);
+    const auto ms = miniscript::FromScript(*script, SATISFIER);
     if (!ms) return;
 
     // We can roundtrip it to its string representation.
     std::string ms_str;
-    assert(ms->ToString(CONVERTER, ms_str));
-    assert(*miniscript::FromScript(*script, CONVERTER) == *ms);
+    assert(ms->ToString(SATISFIER, ms_str));
+    assert(*miniscript::FromScript(*script, SATISFIER) == *ms);
     // The Script representation must roundtrip since we parsed it this way the first time.
-    const CScript ms_script = ms->ToScript(CONVERTER);
+    const CScript ms_script = ms->ToScript(SATISFIER);
     assert(ms_script == *script);
+
+    // Check both malleable and non-malleable satisfaction. Note that we only assert the produced witness
+    // is valid if the Miniscript was sane, as otherwise it could overflow the limits.
+    CScriptWitness witness;
+    const CScript script_pubkey = CScript() << OP_0 << WitnessV0ScriptHash(*script);
+    const bool mal_success = ms->Satisfy(SATISFIER, witness.stack, false) == miniscript::Availability::YES;
+    if (mal_success && ms->IsSaneTopLevel()) {
+        witness.stack.push_back(std::vector<unsigned char>(script->begin(), script->end()));
+        assert(VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, SATISFIER));
+    }
+    witness.stack.clear();
+    const bool nonmal_success = ms->Satisfy(SATISFIER, witness.stack, true) == miniscript::Availability::YES;
+    if (nonmal_success && ms->IsSaneTopLevel()) {
+        witness.stack.push_back(std::vector<unsigned char>(script->begin(), script->end()));
+        assert(VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, SATISFIER));
+    }
+    // If a nonmalleable solution exists, a solution whatsoever must also exist.
+    assert(mal_success >= nonmal_success);
+    // If a miniscript is nonmalleable and needs a signature, and a solution exists, a non-malleable solution must also exist.
+    if (ms->IsNonMalleable() && ms->NeedsSignature()) assert(nonmal_success == mal_success);
+
 }
