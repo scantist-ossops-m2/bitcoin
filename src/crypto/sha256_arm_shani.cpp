@@ -47,8 +47,6 @@ void Transform(uint32_t* s, const unsigned char* chunk, size_t blocks)
     STATE0 = vld1q_u32(&s[0]);
     STATE1 = vld1q_u32(&s[4]);
 
-    const uint8x16_t* input32 = reinterpret_cast<const uint8x16_t*>(chunk);
-
     while (blocks--)
     {
         // Save state
@@ -56,10 +54,11 @@ void Transform(uint32_t* s, const unsigned char* chunk, size_t blocks)
         CDGH_SAVE = STATE1;
 
         // Load and convert input chunk to Big Endian
-        MSG0 = vreinterpretq_u32_u8(vrev32q_u8(*input32++));
-        MSG1 = vreinterpretq_u32_u8(vrev32q_u8(*input32++));
-        MSG2 = vreinterpretq_u32_u8(vrev32q_u8(*input32++));
-        MSG3 = vreinterpretq_u32_u8(vrev32q_u8(*input32++));
+        MSG0 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(chunk + 0)));
+        MSG1 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(chunk + 16)));
+        MSG2 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(chunk + 32)));
+        MSG3 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(chunk + 48)));
+        chunk += 64;
 
         // Original implemenation preloaded message and constant addition which was 1-3% slower.
         // Now included as first step in quad round code saving one Q Neon register
