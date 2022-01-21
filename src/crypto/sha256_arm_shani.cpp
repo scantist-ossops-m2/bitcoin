@@ -237,7 +237,7 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
 
     uint32x4_t STATE0A, STATE0B, STATE1A, STATE1B, ABEF_SAVEA, ABEF_SAVEB, CDGH_SAVEA, CDGH_SAVEB;
     uint32x4_t MSG0A, MSG0B, MSG1A, MSG1B, MSG2A, MSG2B, MSG3A, MSG3B;
-    uint32x4_t TMP0A, TMP0B, TMP2A, TMP2B;
+    uint32x4_t TMP0A, TMP0B, TMP2A, TMP2B, TMP;
 
     // Transform 1: Load state
     STATE0A = vld1q_u32(INIT + 0);
@@ -256,8 +256,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG3B = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(input + 112)));
 
     // Transform 1: Rounds 1-4
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[0]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[0]));
+    TMP = vld1q_u32(&K[0]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG0A = vsha256su0q_u32(MSG0A, MSG1A);
@@ -270,8 +271,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG0B = vsha256su1q_u32(MSG0B, MSG2B, MSG3B);
 
     // Transform 1: Rounds 5-8
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[4]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[4]));
+    TMP = vld1q_u32(&K[4]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG1A = vsha256su0q_u32(MSG1A, MSG2A);
@@ -284,8 +286,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG1B = vsha256su1q_u32(MSG1B, MSG3B, MSG0B);
 
     // Transform 1: Rounds 9-12
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[8]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[8]));
+    TMP = vld1q_u32(&K[8]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG2A = vsha256su0q_u32(MSG2A, MSG3A);
@@ -298,8 +301,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG2B = vsha256su1q_u32(MSG2B, MSG0B, MSG1B);
 
     // Transform 1: Rounds 13-16
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[12]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[12]));
+    TMP = vld1q_u32(&K[12]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG3A = vsha256su0q_u32(MSG3A, MSG0A);
@@ -312,8 +316,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG3B = vsha256su1q_u32(MSG3B, MSG1B, MSG2B);
 
     // Transform 1: Rounds 17-20
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[16]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[16]));
+    TMP = vld1q_u32(&K[16]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG0A = vsha256su0q_u32(MSG0A, MSG1A);
@@ -326,8 +331,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG0B = vsha256su1q_u32(MSG0B, MSG2B, MSG3B);
 
     // Transform 1: Rounds 21-24
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[20]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[20]));
+    TMP = vld1q_u32(&K[20]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG1A = vsha256su0q_u32(MSG1A, MSG2A);
@@ -340,8 +346,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG1B = vsha256su1q_u32(MSG1B, MSG3B, MSG0B);
 
     // Transform 1: Rounds 25-28
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[24]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[24]));
+    TMP = vld1q_u32(&K[24]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG2A = vsha256su0q_u32(MSG2A, MSG3A);
@@ -354,8 +361,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG2B = vsha256su1q_u32(MSG2B, MSG0B, MSG1B);
 
     // Transform 1: Rounds 29-32
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[28]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[28]));
+    TMP = vld1q_u32(&K[28]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG3A = vsha256su0q_u32(MSG3A, MSG0A);
@@ -368,8 +376,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG3B = vsha256su1q_u32(MSG3B, MSG1B, MSG2B);
 
     // Transform 1: Rounds 33-36
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[32]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[32]));
+    TMP = vld1q_u32(&K[32]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG0A = vsha256su0q_u32(MSG0A, MSG1A);
@@ -382,8 +391,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG0B = vsha256su1q_u32(MSG0B, MSG2B, MSG3B);
 
     // Transform 1: Rounds 37-40
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[36]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[36]));
+    TMP = vld1q_u32(&K[36]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG1A = vsha256su0q_u32(MSG1A, MSG2A);
@@ -396,8 +406,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG1B = vsha256su1q_u32(MSG1B, MSG3B, MSG0B);
 
     // Transform 1: Rounds 41-44
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[40]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[40]));
+    TMP = vld1q_u32(&K[40]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG2A = vsha256su0q_u32(MSG2A, MSG3A);
@@ -410,8 +421,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG2B = vsha256su1q_u32(MSG2B, MSG0B, MSG1B);
 
     // Transform 1: Rounds 45-48
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[44]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[44]));
+    TMP = vld1q_u32(&K[44]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG3A = vsha256su0q_u32(MSG3A, MSG0A);
@@ -424,8 +436,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG3B = vsha256su1q_u32(MSG3B, MSG1B, MSG2B);
 
     // Transform 1: Rounds 49-52
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[48]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[48]));
+    TMP = vld1q_u32(&K[48]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -434,8 +447,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 1: Rounds 53-56
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[52]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[52]));
+    TMP = vld1q_u32(&K[52]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -444,8 +458,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 1: Rounds 57-60
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[56]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[56]));
+    TMP = vld1q_u32(&K[56]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -454,8 +469,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 1: Rounds 61-64
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[60]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[60]));
+    TMP = vld1q_u32(&K[60]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -464,10 +480,12 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 1: Update state
-    STATE0A = vaddq_u32(STATE0A, vld1q_u32(INIT + 0));
-    STATE0B = vaddq_u32(STATE0B, vld1q_u32(INIT + 0));
-    STATE1A = vaddq_u32(STATE1A, vld1q_u32(INIT + 4));
-    STATE1B = vaddq_u32(STATE1B, vld1q_u32(INIT + 4));
+    TMP = vld1q_u32(INIT + 0);
+    STATE0A = vaddq_u32(STATE0A, TMP);
+    STATE0B = vaddq_u32(STATE0B, TMP);
+    TMP = vld1q_u32(INIT + 4);
+    STATE1A = vaddq_u32(STATE1A, TMP);
+    STATE1B = vaddq_u32(STATE1B, TMP);
 
     // Transform 2: Save state
     ABEF_SAVEA = STATE0A;
@@ -476,164 +494,148 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     CDGH_SAVEB = STATE1B;
 
     // Transform 2: Rounds 1-4
-    TMP0A = vld1q_u32(MIDS + 0);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 0);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 5-8
-    TMP0A = vld1q_u32(MIDS + 4);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 4);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 9-12
-    TMP0A = vld1q_u32(MIDS + 8);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 8);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 13-16
-    TMP0A = vld1q_u32(MIDS + 12);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 12);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 17-20
-    TMP0A = vld1q_u32(MIDS + 16);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 16);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 21-24
-    TMP0A = vld1q_u32(MIDS + 20);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 20);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 25-28
-    TMP0A = vld1q_u32(MIDS + 24);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 24);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 29-32
-    TMP0A = vld1q_u32(MIDS + 28);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 28);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 33-36
-    TMP0A = vld1q_u32(MIDS + 32);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 32);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 37-40
-    TMP0A = vld1q_u32(MIDS + 36);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 36);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 41-44
-    TMP0A = vld1q_u32(MIDS + 40);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 40);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 45-48
-    TMP0A = vld1q_u32(MIDS + 44);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 44);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 49-52
-    TMP0A = vld1q_u32(MIDS + 48);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 48);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 53-56
-    TMP0A = vld1q_u32(MIDS + 52);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 52);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 57-60
-    TMP0A = vld1q_u32(MIDS + 56);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 56);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Rounds 61-64
-    TMP0A = vld1q_u32(MIDS + 60);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(MIDS + 60);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
 
     // Transform 2: Update state
     STATE0A = vaddq_u32(STATE0A, ABEF_SAVEA);
@@ -658,8 +660,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = STATE1A;
 
     // Transform 3: Rounds 1-4
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[0]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[0]));
+    TMP = vld1q_u32(&K[0]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG0A = vsha256su0q_u32(MSG0A, MSG1A);
@@ -672,8 +675,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG0B = vsha256su1q_u32(MSG0B, MSG2B, MSG3B);
 
     // Transform 3: Rounds 5-8
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[4]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[4]));
+    TMP = vld1q_u32(&K[4]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG1A = vsha256su0q_u32(MSG1A, MSG2A);
@@ -686,36 +690,35 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG1B = vsha256su1q_u32(MSG1B, MSG3B, MSG0B);
 
     // Transform 3: Rounds 9-12
-    TMP0A = vld1q_u32(FINS + 0);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(FINS + 0);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG2A = vld1q_u32(FINS + 4);
     MSG2B = MSG2A;
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
     MSG2A = vsha256su1q_u32(MSG2A, MSG0A, MSG1A);
     MSG2B = vsha256su1q_u32(MSG2B, MSG0B, MSG1B);
 
     // Transform 3: Rounds 13-16
-    TMP0A = vld1q_u32(FINS + 8);
-    TMP0B = TMP0A;
+    TMP = vld1q_u32(FINS + 8);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG3A = vsha256su0q_u32(MSG3A, MSG0A);
     MSG3B = vsha256su0q_u32(MSG3B, MSG0B);
-    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
-    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP0B);
-    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP0A);
-    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
+    STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP);
+    STATE0B = vsha256hq_u32(STATE0B, STATE1B, TMP);
+    STATE1A = vsha256h2q_u32(STATE1A, TMP2A, TMP);
+    STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP);
     MSG3A = vsha256su1q_u32(MSG3A, MSG1A, MSG2A);
     MSG3B = vsha256su1q_u32(MSG3B, MSG1B, MSG2B);
 
     // Transform 3: Rounds 17-20
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[16]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[16]));
+    TMP = vld1q_u32(&K[16]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG0A = vsha256su0q_u32(MSG0A, MSG1A);
@@ -728,8 +731,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG0B = vsha256su1q_u32(MSG0B, MSG2B, MSG3B);
 
     // Transform 3: Rounds 21-24
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[20]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[20]));
+    TMP = vld1q_u32(&K[20]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG1A = vsha256su0q_u32(MSG1A, MSG2A);
@@ -742,8 +746,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG1B = vsha256su1q_u32(MSG1B, MSG3B, MSG0B);
 
     // Transform 3: Rounds 25-28
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[24]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[24]));
+    TMP = vld1q_u32(&K[24]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG2A = vsha256su0q_u32(MSG2A, MSG3A);
@@ -756,8 +761,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG2B = vsha256su1q_u32(MSG2B, MSG0B, MSG1B);
 
     // Transform 3: Rounds 29-32
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[28]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[28]));
+    TMP = vld1q_u32(&K[28]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG3A = vsha256su0q_u32(MSG3A, MSG0A);
@@ -770,8 +776,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG3B = vsha256su1q_u32(MSG3B, MSG1B, MSG2B);
 
     // Transform 3: Rounds 33-36
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[32]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[32]));
+    TMP = vld1q_u32(&K[32]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG0A = vsha256su0q_u32(MSG0A, MSG1A);
@@ -784,8 +791,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG0B = vsha256su1q_u32(MSG0B, MSG2B, MSG3B);
 
     // Transform 3: Rounds 37-40
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[36]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[36]));
+    TMP = vld1q_u32(&K[36]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG1A = vsha256su0q_u32(MSG1A, MSG2A);
@@ -798,8 +806,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG1B = vsha256su1q_u32(MSG1B, MSG3B, MSG0B);
 
     // Transform 3: Rounds 41-44
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[40]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[40]));
+    TMP = vld1q_u32(&K[40]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG2A = vsha256su0q_u32(MSG2A, MSG3A);
@@ -812,8 +821,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG2B = vsha256su1q_u32(MSG2B, MSG0B, MSG1B);
 
     // Transform 3: Rounds 45-48
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[44]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[44]));
+    TMP = vld1q_u32(&K[44]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     MSG3A = vsha256su0q_u32(MSG3A, MSG0A);
@@ -826,8 +836,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     MSG3B = vsha256su1q_u32(MSG3B, MSG1B, MSG2B);
 
     // Transform 3: Rounds 49-52
-    TMP0A = vaddq_u32(MSG0A, vld1q_u32(&K[48]));
-    TMP0B = vaddq_u32(MSG0B, vld1q_u32(&K[48]));
+    TMP = vld1q_u32(&K[48]);
+    TMP0A = vaddq_u32(MSG0A, TMP);
+    TMP0B = vaddq_u32(MSG0B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -836,8 +847,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 3: Rounds 53-56
-    TMP0A = vaddq_u32(MSG1A, vld1q_u32(&K[52]));
-    TMP0B = vaddq_u32(MSG1B, vld1q_u32(&K[52]));
+    TMP = vld1q_u32(&K[52]);
+    TMP0A = vaddq_u32(MSG1A, TMP);
+    TMP0B = vaddq_u32(MSG1B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -846,8 +858,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 3: Rounds 57-60
-    TMP0A = vaddq_u32(MSG2A, vld1q_u32(&K[56]));
-    TMP0B = vaddq_u32(MSG2B, vld1q_u32(&K[56]));
+    TMP = vld1q_u32(&K[56]);
+    TMP0A = vaddq_u32(MSG2A, TMP);
+    TMP0B = vaddq_u32(MSG2B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -856,8 +869,9 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 3: Rounds 61-64
-    TMP0A = vaddq_u32(MSG3A, vld1q_u32(&K[60]));
-    TMP0B = vaddq_u32(MSG3B, vld1q_u32(&K[60]));
+    TMP = vld1q_u32(&K[60]);
+    TMP0A = vaddq_u32(MSG3A, TMP);
+    TMP0B = vaddq_u32(MSG3B, TMP);
     TMP2A = STATE0A;
     TMP2B = STATE0B;
     STATE0A = vsha256hq_u32(STATE0A, STATE1A, TMP0A);
@@ -866,10 +880,12 @@ void Transform_2way(unsigned char* output, const unsigned char* input)
     STATE1B = vsha256h2q_u32(STATE1B, TMP2B, TMP0B);
 
     // Transform 3: Update state
-    STATE0A = vaddq_u32(STATE0A, vld1q_u32(INIT + 0));
-    STATE0B = vaddq_u32(STATE0B, vld1q_u32(INIT + 0));
-    STATE1A = vaddq_u32(STATE1A, vld1q_u32(INIT + 4));
-    STATE1B = vaddq_u32(STATE1B, vld1q_u32(INIT + 4));
+    TMP = vld1q_u32(INIT + 0);
+    STATE0A = vaddq_u32(STATE0A, TMP);
+    STATE0B = vaddq_u32(STATE0B, TMP);
+    TMP = vld1q_u32(INIT + 4);
+    STATE1A = vaddq_u32(STATE1A, TMP);
+    STATE1B = vaddq_u32(STATE1B, TMP);
 
     // Store result
     vst1q_u8(output, vrev32q_u8(vreinterpretq_u8_u32(STATE0A)));
