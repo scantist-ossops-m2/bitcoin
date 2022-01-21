@@ -635,15 +635,25 @@ std::string SHA256AutoDetect()
 
 #if defined(ENABLE_ARM_SHANI) && !defined(BUILD_BITCOIN_INTERNAL)
     bool have_arm_shani = false;
-    #ifdef __linux__
+
+#ifdef __linux__
+#ifdef __arm__ // 32-bit
+    if (getauxval(AT_HWCAP2) & HWCAP2_SHA2) {
+        have_arm_shani = true;
+    }
+#endif
+#ifdef __aarch64__ // 64-bit
     if (getauxval(AT_HWCAP) & HWCAP_SHA2) {
         have_arm_shani = true;
     }
-    #endif
-    #if defined(__APPLE__)
+#endif
+#endif
+
+#if defined(__APPLE__)
         // let's assume this is always available on Apple Silicon
         have_arm_shani = true;
-    #endif
+#endif
+
     if (have_arm_shani) {
         Transform = sha256_arm_shani::Transform;
         TransformD64 = TransformD64Wrapper<sha256_arm_shani::Transform>;
