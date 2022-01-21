@@ -225,6 +225,13 @@ void Transform_1way(unsigned char* output, const unsigned char* input)
         0xd2c741c6, 0x07237ea3, 0xa4954b68, 0x4c191d76
     };
 
+    /* A few precomputed message schedule values for the 3rd transform. */
+    static const uint32_t FINS[12] = {
+        0x5807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+        0x80000000, 0x00000000, 0x00000000, 0x00000000,
+        0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf274
+    };
+
     /* Padding processed in the 3rd transform (byteswapped). */
     static const uint32_t FINAL[8] = {0x80000000, 0, 0, 0, 0, 0, 0, 0x100};
 
@@ -497,15 +504,15 @@ void Transform_1way(unsigned char* output, const unsigned char* input)
     MSG1 = vsha256su1q_u32(MSG1, MSG3, MSG0);
 
     // Transform 3: Rounds 9-12
-    TMP0 = vaddq_u32(MSG2, vld1q_u32(&K[8]));
+    TMP0 = vld1q_u32(FINS + 0);
     TMP2 = STATE0;
-    MSG2 = vsha256su0q_u32(MSG2, MSG3);
+    MSG2 = vld1q_u32(FINS + 4);
     STATE0 = vsha256hq_u32(STATE0, STATE1, TMP0);
     STATE1 = vsha256h2q_u32(STATE1, TMP2, TMP0);
     MSG2 = vsha256su1q_u32(MSG2, MSG0, MSG1);
 
     // Transform 3: Rounds 13-16
-    TMP0 = vaddq_u32(MSG3, vld1q_u32(&K[12]));
+    TMP0 = vld1q_u32(FINS + 8);
     TMP2 = STATE0;
     MSG3 = vsha256su0q_u32(MSG3, MSG0);
     STATE0 = vsha256hq_u32(STATE0, STATE1, TMP0);
