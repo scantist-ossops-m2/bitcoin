@@ -205,19 +205,11 @@ void Transform_1way(unsigned char* output, const unsigned char* input)
         0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
     };
 
-    /* Padding processed in the 2nd transform. */
-    static const uint8_t MID[64] = {
-        0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0
-    };
+    /* Padding processed in the 2nd transform (byteswapped). */
+    static const uint32_t MID[16] = {0x80000000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x200};
 
-    /* Padding processed in the 3rd transform. */
-    static const uint8_t FINAL[32] = {
-        0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0
-    };
+    /* Padding processed in the 3rd transform (byteswapped). */
+    static const uint32_t FINAL[8] = {0x80000000, 0, 0, 0, 0, 0, 0, 0x100};
 
     uint32x4_t STATE0, STATE1, ABEF_SAVE, CDGH_SAVE;
     uint32x4_t MSG0, MSG1, MSG2, MSG3;
@@ -361,11 +353,11 @@ void Transform_1way(unsigned char* output, const unsigned char* input)
     ABEF_SAVE = STATE0;
     CDGH_SAVE = STATE1;
 
-    // Transform 2: Load and convert padding to Big Endian
-    MSG0 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(MID + 0)));
-    MSG1 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(MID + 16)));
-    MSG2 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(MID + 32)));
-    MSG3 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(MID + 48)));
+    // Transform 2: Load padding
+    MSG0 = vld1q_u32(MID + 0);
+    MSG1 = vld1q_u32(MID + 4);
+    MSG2 = vld1q_u32(MID + 8);
+    MSG3 = vld1q_u32(MID + 12);
 
     // Transform 2: Rounds 1-4
     TMP0 = vaddq_u32(MSG0, vld1q_u32(&K[0]));
@@ -491,11 +483,11 @@ void Transform_1way(unsigned char* output, const unsigned char* input)
     STATE0 = vaddq_u32(STATE0, ABEF_SAVE);
     STATE1 = vaddq_u32(STATE1, CDGH_SAVE);
 
-    // Transform 3: Pad previous output and convert padding to Big Endian
+    // Transform 3: Pad previous output
     MSG0 = STATE0;
     MSG1 = STATE1;
-    MSG2 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(FINAL + 0)));
-    MSG3 = vreinterpretq_u32_u8(vrev32q_u8(vld1q_u8(FINAL + 16)));
+    MSG2 = vld1q_u32(FINAL + 0);
+    MSG3 = vld1q_u32(FINAL + 4);
 
     // Transform 3: Load state
     STATE0 = vld1q_u32(INIT + 0);
