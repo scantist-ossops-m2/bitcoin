@@ -170,8 +170,6 @@ SatisfierContext SATISFIER_CTX;
 CheckerContext CHECKER_CTX;
 // A dummy scriptsig to pass to VerifyScript (we always use Segwit v0).
 const CScript DUMMY_SCRIPTSIG;
-// We generate the pseudorandom nodes recursively, this puts a bound.
-static constexpr size_t MAX_NESTED_DEPTH = 402;
 
 using NodeType = miniscript::NodeType;
 using NodeRef = miniscript::NodeRef<CPubKey>;
@@ -180,184 +178,215 @@ using miniscript::operator"" _mst;
 //! Construct a miniscript node as a shared_ptr.
 template<typename... Args> NodeRef MakeNodeRef(Args&&... args) { return miniscript::MakeNodeRef<CPubKey>(std::forward<Args>(args)...); }
 
+/** A QueueElem represents (partial) information about a miniscript Node to be constructed in GenNode(). */
+struct QueueElem {
+    /** What miniscript type is required. */
+    miniscript::Type typ;
+    /** If already decided, what NodeType to use, and how many children. */
+    std::optional<std::pair<NodeType, unsigned>> info;
+
+    /** Construct an invalid QueueElem. */
+    QueueElem() : typ(""_mst) {}
+    /** Construct a QueueElem that permits an arbitrary node of specified type. */
+    QueueElem(miniscript::Type typ_) : typ(typ_) {}
+    /** Construct a QueueElem that permits a specific NodeType, with no children. */
+    QueueElem(NodeType nt_) : typ(""_mst), info({nt_, 0}) {}
+};
+
+/** Helper for modifying the GenNode todo list. */
+template<typename... Args>
+void Plan(std::vector<QueueElem>& todo, NodeType nt, Args... args)
+{
+    auto& elem = todo.back();
+    assert(!elem.info.has_value());
+    elem.info = {nt, sizeof...(args)};
+    todo.resize(todo.size() + sizeof...(args));
+    int pos{0};
+    ( (*(todo.rbegin() + (pos++)) = QueueElem{args}, 0), ...);
+}
+
+std::set<std::pair<NodeType, miniscript::Type>> types;
+
 /**
  * Generate a Miniscript node based on the fuzzer's input.
- * Note this does not attempt to produce a well-typed (let alone safe) Miniscript node.
  */
-NodeRef GenNode(FuzzedDataProvider& provider, const miniscript::Type typ, const size_t recursion_depth);
+NodeRef GenNode(FuzzedDataProvider& provider, const miniscript::Type typ) {
+    /** A stack of miniscript Nodes being built up. */
+    std::vector<NodeRef> stack;
+    /** The queue of instructions. */
+    std::vector<QueueElem> todo{QueueElem{typ}};
 
-/**
- * Generate a pseudorandom node. If invalid, return NULL.
- * Used to cut-through as a node with invalid subs will never be valid.
- */
-NodeRef GenValidNode(FuzzedDataProvider& provider, const miniscript::Type typ, const size_t recursion_depth)
-{
-    const NodeRef node = GenNode(provider, typ, recursion_depth);
-    if (!node || !node->IsValid() || !(node->GetType() << typ)) return {};
-    return node;
-}
+    while (!todo.empty()) {
+        // The expected type we have to construct.
+        miniscript::Type typ = todo.back().typ;
+        if (!todo.back().info.has_value()) {
+            // NodeType/children have not been decided yet. Decide them.
 
-//! Generate a vector of miniscript nodes of the given types.
-std::vector<NodeRef> MultiNode(FuzzedDataProvider& provider, const std::initializer_list<miniscript::Type> types,
-                               const size_t recursion_depth)
-{
-    std::vector<NodeRef> subs;
-    for (const auto type : types) {
-        NodeRef sub = GenValidNode(provider, type, recursion_depth);
-        if (!sub) return {};
-        subs.push_back(std::move(sub));
+            // Not all type properties are implemented in the match logic below,
+            // so strip away the ones we cannot discern. When the node is actually
+            // constructed, we compare the full requested type properties.
+            typ = typ & "BVWKzondu"_mst;
+            // Helper for computing the child nodes' type properties.
+            auto basetype = "BVK"_mst & typ;
+
+            // Fragcode selects which of the (applicable) matching rules below is selected.
+            // Every rule, if it matches, checks if fragcode has reached 0, and if so,
+            // the rule is used. If not, fragcode is decremented and we continue to the
+            // next rule. This is performed in a loop so that if all rules were tried,
+            // and fragcode hasn't reached 0 yet, we start over. This avoids the need to
+            // count the number of matching rules up front.
+            int fragcode = provider.ConsumeIntegralInRange<uint8_t>(0, 63);
+            while (true) {
+                /* Count how many matching rules we have, so that if there are none
+                 * we can abort instead of looping forever. */
+                int candidates = 0;
+                if ("Bzud"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::JUST_0); // 0
+                } else if ("Bzu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::JUST_1); // 1
+                } else if ("Kondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::PK_K); // pk_k
+                } else if ("Kndu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::PK_H); // pk_h
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_C, NodeType::PK_K); // pk
+                } else if ("Bndu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_C, NodeType::PK_H); // pkh
+                } else if ("Bz"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OLDER); // older
+                } else if ("Bz"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::AFTER); // after
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::SHA256); // sha256
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::RIPEMD160); // ripemd160
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::HASH256); // hash256
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::HASH160); // hash160
+                } else if ("Bndu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::MULTI); // multi
+                } else if ("Wdu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_A, "B"_mst); // a:
+                } else if ("Wdu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_S, "Bo"_mst); // s:
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_C, "K"_mst); // c:
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_D, "Vz"_mst); // d:
+                } else if ("Vzon"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_V, "B"_mst); // d:
+                } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_J, "Bn"_mst); // j:
+                } else if ("Bzondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::WRAP_N, "B"_mst); // n:
+                } else if ("Boud"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OR_I, NodeType::JUST_0, "B"_mst); // l:
+                } else if ("Boud"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OR_I, "B"_mst, NodeType::JUST_0); // u:
+                } else if ("BVKzonu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::AND_V, "V"_mst, basetype); // and_v
+                } else if ("Bzondu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::AND_B, "B"_mst, "W"_mst); // and_b
+                } else if ("Bzoud"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::ANDOR, "Bdu"_mst, basetype, NodeType::JUST_0); // and_n
+                } else if ("Bzodu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OR_B, "Bd"_mst, "Wd"_mst); // or_b
+                } else if ("Vzo"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OR_C, "Bdu"_mst, "V"_mst); // or_c
+                } else if ("Bzodu"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OR_D, "Bdu"_mst, "B"_mst); // or_d
+                } else if ("BKVoud"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::OR_I, basetype, basetype); // or_i
+                } else if ("BVKzoud"_mst << typ && ++candidates && !(fragcode--)) {
+                    Plan(todo, NodeType::ANDOR, "Bdu"_mst, basetype, basetype); // andor
+                } else if ("Bzodu"_mst << typ && ++candidates && !(fragcode--)) {
+                    // thresh()
+                    auto children = provider.ConsumeIntegralInRange<uint32_t>(1, MAX_OPS_PER_SCRIPT / 2);
+                    todo.back().info = {NodeType::THRESH, children};
+                    todo.reserve(todo.size() + children);
+                    for (uint32_t i = 1; i < children; ++i) todo.emplace_back("Wdu"_mst);
+                    todo.emplace_back("Bdu"_mst);
+                } else if (candidates == 0) {
+                    // This typ value has no applicable rules. Abort.
+                    return {};
+                } else {
+                    // One or more fragments were applicable, but fragcode hadn't reached 0 yet.
+                    // Loop again.
+                    continue;
+                }
+                // If we reach this line, a fragment was selected.
+                break;
+            }
+        } else {
+            // The back of todo has nodetype and number of children decided, and
+            // those children have been constructed at the back of stack. Pop
+            // that entry off todo, and use it to construct a new NodeRef on
+            // stack.
+            auto [nodetype, children] = *todo.back().info;
+            todo.pop_back();
+            // Gather children from the back of stack.
+            std::vector<NodeRef> sub;
+            sub.reserve(children);
+            for (size_t i = 0; i < children; ++i) {
+                sub.push_back(std::move(*(stack.end() - children + i)));
+            }
+            stack.erase(stack.end() - children, stack.end());
+            // Additional arguments for construction of NodeRef.
+            uint32_t val = 0;
+            std::vector<unsigned char> arg;
+            std::vector<CPubKey> keys;
+            // Fill in arguments
+            switch (nodetype) {
+                case NodeType::PK_K:
+                case NodeType::PK_H:
+                    keys.push_back(PickValue(provider, TEST_DATA.dummy_keys));
+                    break;
+                case NodeType::MULTI: {
+                    int num_keys = provider.ConsumeIntegralInRange<int>(1, 20);
+                    val = provider.ConsumeIntegralInRange<uint32_t>(1, num_keys);
+                    for (int i = 0; i < num_keys; ++i) keys.push_back(PickValue(provider, TEST_DATA.dummy_keys));
+                    break;
+                }
+                case NodeType::THRESH:
+                    val = provider.ConsumeIntegralInRange<uint32_t>(1, sub.size());
+                    break;
+                case NodeType::AFTER:
+                case NodeType::OLDER:
+                    val = provider.ConsumeIntegralInRange<uint32_t>(1, 0x7FFFFFFF);
+                    break;
+                case NodeType::SHA256:
+                    arg = PickValue(provider, TEST_DATA.sha256);
+                    break;
+                case NodeType::RIPEMD160:
+                    arg = PickValue(provider, TEST_DATA.ripemd160);
+                    break;
+                case NodeType::HASH256:
+                    arg = PickValue(provider, TEST_DATA.hash256);
+                    break;
+                case NodeType::HASH160:
+                    arg = PickValue(provider, TEST_DATA.hash160);
+                    break;
+                default:
+                    break;
+            }
+            // Construct new NodeRef.
+            NodeRef node;
+            if (keys.empty()) {
+                node = MakeNodeRef(nodetype, std::move(sub), std::move(arg), val);
+            } else {
+                assert(sub.empty());
+                assert(arg.empty());
+                node = MakeNodeRef(nodetype, std::move(keys), val);
+            }
+            // Verify acceptability.
+            if (!node || !node->IsValid() || !(node->GetType() << typ)) return {};
+            // Move it to the stack.
+            stack.push_back(std::move(node));
+        }
     }
-    return subs;
-}
-
-//! Generate a node with pseudorandom subs of the given types.
-NodeRef MultiSubs(FuzzedDataProvider& provider, const NodeType node_type, const std::initializer_list<miniscript::Type> subtypes,
-                  const size_t recursion_depth)
-{
-    auto subs = MultiNode(provider, subtypes, recursion_depth);
-    if (subs.empty()) return {};
-    return MakeNodeRef(node_type, std::move(subs));
-}
-
-NodeRef GenNode(FuzzedDataProvider& provider, const miniscript::Type typ, const size_t recursion_depth) {
-    if (recursion_depth >= MAX_NESTED_DEPTH) return {};
-
-    if (typ << "B"_mst) {
-        switch (provider.ConsumeIntegralInRange<size_t>(0, 19)) {
-            case 0: return MakeNodeRef(provider.ConsumeBool() ? NodeType::JUST_0 : NodeType::JUST_1);
-            case 1: {
-                const uint32_t k{provider.ConsumeIntegralInRange<uint32_t>(1, CTxIn::SEQUENCE_LOCKTIME_DISABLE_FLAG - 1)};
-                return MakeNodeRef(provider.ConsumeBool() ? NodeType::OLDER : NodeType::AFTER, k);
-            }
-            case 2: {
-                const size_t hashtype = provider.ConsumeIntegralInRange<size_t>(0, 3);
-                const size_t index = provider.ConsumeIntegralInRange<size_t>(0, 255);
-                switch (hashtype) {
-                    case 0: return MakeNodeRef(NodeType::SHA256, TEST_DATA.sha256[index]);
-                    case 1: return MakeNodeRef(NodeType::RIPEMD160, TEST_DATA.ripemd160[index]);
-                    case 2: return MakeNodeRef(NodeType::HASH256, TEST_DATA.hash256[index]);
-                    case 3: return MakeNodeRef(NodeType::HASH160, TEST_DATA.hash160[index]);
-                }
-            }
-            case 3: {
-                if (NodeRef sub = GenValidNode(provider, "K"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::WRAP_C, Vector(std::move(sub)));
-                }
-                return {};
-            }
-            case 4: {
-                if (NodeRef sub = GenValidNode(provider, "K"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::WRAP_C, Vector(std::move(sub)));
-                }
-                return {};
-            }
-            case 5: {
-                if (NodeRef sub = GenValidNode(provider, "V"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::WRAP_D, Vector(std::move(sub)));
-                }
-                return {};
-            }
-            case 6: {
-                if (NodeRef sub = GenValidNode(provider, "B"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::WRAP_J, Vector(std::move(sub)));
-                }
-                return {};
-            }
-            case 7: {
-                if (NodeRef sub = GenValidNode(provider, "B"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::WRAP_N, Vector(std::move(sub)));
-                }
-                return {};
-            }
-            case 8: {
-                if (NodeRef sub = GenValidNode(provider, "B"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::OR_I, Vector(std::move(sub), MakeNodeRef(NodeType::JUST_0)));
-                }
-                return {};
-            }
-            case 9: {
-                if (NodeRef sub = GenValidNode(provider, "B"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::OR_I, Vector(MakeNodeRef(NodeType::JUST_0), std::move(sub)));
-                }
-                return {};
-            }
-            case 10: {
-                if (NodeRef sub = GenValidNode(provider, "V"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::AND_V, Vector(std::move(sub), MakeNodeRef(NodeType::JUST_1)));
-                }
-                return {};
-            }
-            case 11: {
-                if (NodeRef sub = GenValidNode(provider, "V"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::AND_V, Vector(std::move(sub), MakeNodeRef(NodeType::JUST_1)));
-                }
-                return {};
-            }
-            case 12: {
-                auto subs = MultiNode(provider, {"B"_mst, "B"_mst}, recursion_depth + 1);
-                if (subs.empty()) return {};
-                subs.push_back(MakeNodeRef(NodeType::JUST_0));
-                return MakeNodeRef(NodeType::ANDOR, std::move(subs));
-            }
-            case 13: return MultiSubs(provider, NodeType::AND_B, {"B"_mst, "W"_mst}, recursion_depth + 1);
-            case 14: return MultiSubs(provider, NodeType::OR_B, {"B"_mst, "W"_mst}, recursion_depth + 1);
-            case 15: return MultiSubs(provider, NodeType::OR_D, {"B"_mst, "B"_mst}, recursion_depth + 1);
-            case 16: return MultiSubs(provider, NodeType::OR_I, {"B"_mst, "B"_mst}, recursion_depth + 1);
-            case 17: {
-                const size_t n_keys = provider.ConsumeIntegralInRange(1, 20);
-                const size_t n_sigs = provider.ConsumeIntegralInRange<size_t>(1, n_keys);
-                std::vector<CPubKey> keys;
-                for (size_t i = 0; i < n_keys; ++i) keys.push_back(TEST_DATA.dummy_keys[provider.ConsumeIntegralInRange(0, 255)]);
-                return MakeNodeRef(NodeType::MULTI, std::move(keys), n_sigs);
-            }
-            case 18: return MultiSubs(provider, NodeType::ANDOR, {"B"_mst, "B"_mst, "B"_mst}, recursion_depth + 1);
-            case 19: {
-                const size_t n_subs = 3 + provider.ConsumeIntegralInRange(0, 90);
-                const uint32_t k = 2 + provider.ConsumeIntegralInRange<uint32_t>(0, n_subs - 3);
-                const auto types = Cat(Vector("B"_mst), std::vector<miniscript::Type>(n_subs - 1, "W"_mst));
-                std::vector<NodeRef> subs;
-                for (const auto type : types) {
-                    NodeRef sub = GenValidNode(provider, type, recursion_depth);
-                    if (!sub) return {};
-                    subs.push_back(std::move(sub));
-                }
-                if (subs.empty()) return {};
-                return MakeNodeRef(NodeType::THRESH, subs, k);
-            }
-        }
-    } else if (typ << "V"_mst) {
-        switch (provider.ConsumeIntegralInRange(0, 4)) {
-            case 0: {
-                if (NodeRef sub = GenValidNode(provider, "B"_mst, recursion_depth + 1)) {
-                    return MakeNodeRef(NodeType::WRAP_V, Vector(std::move(sub)));
-                }
-                return {};
-            }
-            case 1: return MultiSubs(provider, NodeType::AND_V, {"V"_mst, "V"_mst}, recursion_depth + 1);
-            case 2: return MultiSubs(provider, NodeType::OR_C, {"B"_mst, "V"_mst}, recursion_depth + 1);
-            case 3: return MultiSubs(provider, NodeType::OR_I, {"V"_mst, "V"_mst}, recursion_depth + 1);
-            case 4: return MultiSubs(provider, NodeType::ANDOR, {"B"_mst, "V"_mst, "V"_mst}, recursion_depth + 1);
-        }
-    } else if (typ << "W"_mst) {
-        // Generate a "W" node by wrapping a "B" node.
-        auto sub = GenValidNode(provider, "B"_mst, recursion_depth + 1);
-        if (!sub) return {};
-        if (sub->GetType() << "o"_mst && provider.ConsumeBool()) {
-            return MakeNodeRef(NodeType::WRAP_S, Vector(std::move(sub)));
-        }
-        return MakeNodeRef(NodeType::WRAP_A, Vector(std::move(sub)));
-    } else if (typ << "K"_mst) {
-        // Generate a "K" node.
-        switch (provider.ConsumeIntegralInRange(0, 4)) {
-            case 0: return MakeNodeRef(NodeType::PK_K, Vector(TEST_DATA.dummy_keys[provider.ConsumeIntegralInRange(0, 255)]));
-            case 1: return MakeNodeRef(NodeType::PK_H, Vector(TEST_DATA.dummy_keys[provider.ConsumeIntegralInRange(0, 255)]));
-            case 2: return MultiSubs(provider, NodeType::AND_V, {"V"_mst, "K"_mst}, recursion_depth + 1);
-            case 3: return MultiSubs(provider, NodeType::OR_I, {"K"_mst, "K"_mst}, recursion_depth + 1);
-            case 4: return MultiSubs(provider, NodeType::ANDOR, {"B"_mst, "K"_mst, "K"_mst}, recursion_depth + 1);
-        }
-    }
-    assert(false);
-    return {};
+    assert(stack.size() == 1);
+    return std::move(stack[0]);
 }
 
 //! Pre-compute the test data and point the various contexts to it.
@@ -374,7 +403,7 @@ FUZZ_TARGET_INIT(miniscript_random, initialize_miniscript_random)
     FuzzedDataProvider fuzzed_data_provider(buffer.data(), buffer.size());
 
     // Generate a top-level node
-    const auto node = GenNode(fuzzed_data_provider, "B"_mst, 0);
+    const auto node = GenNode(fuzzed_data_provider, "B"_mst);
     if (!node || !node->IsValidTopLevel()) return;
 
     // Check roundtrip to Script, and consistency between script size estimation and real size
@@ -399,6 +428,7 @@ FUZZ_TARGET_INIT(miniscript_random, initialize_miniscript_random)
     auto parsed = miniscript::FromString(str, PARSER_CTX);
     assert(parsed);
     assert(*parsed == *node);
+
 
     // Check both malleable and non-malleable satisfaction. Note that we only assert the produced witness
     // is valid if the Miniscript was sane, as otherwise it could overflow the limits.
