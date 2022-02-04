@@ -438,13 +438,20 @@ FUZZ_TARGET_INIT(miniscript_random, initialize_miniscript_random)
     assert(parsed);
     assert(*parsed == *node);
 
+    // Create a padded script with OP_NOPs, to exhaust the op counting (causing much more frequent
+    // failure in case the ops counting logic is incorrect.
+    CScript padscript = script;
+    for (int i = node->GetOps(); i < MAX_OPS_PER_SCRIPT; ++i) {
+        padscript = BuildScript(OP_NOP, padscript);
+    }
+
     // Test non-malleable satisfaction. Note that we only assert the produced witness
     // is valid if the Miniscript was sane, as otherwise it could overflow the limits.
     CScriptWitness witness;
-    const CScript script_pubkey = CScript() << OP_0 << WitnessV0ScriptHash(script);
+    const CScript script_pubkey = CScript() << OP_0 << WitnessV0ScriptHash(padscript);
     const bool nonmal_success = node->Satisfy(SATISFIER_CTX, witness.stack, true) == miniscript::Availability::YES;
     if (nonmal_success && node->IsSaneTopLevel()) {
-        witness.stack.push_back(std::vector<unsigned char>(script.begin(), script.end()));
+        witness.stack.push_back(std::vector<unsigned char>(padscript.begin(), padscript.end()));
         assert(VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX));
     }
     auto nonmal_stack = std::move(witness.stack);
