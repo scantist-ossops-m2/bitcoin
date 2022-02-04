@@ -113,8 +113,8 @@ struct ParserContext {
 struct SatisfierContext: ParserContext {
     // Timelock challenges satisfaction. Make the value (deterministically) vary to explore different
     // paths.
-    bool CheckAfter(uint32_t value) const { return value % 2; }
-    bool CheckOlder(uint32_t value) const { return value % 2; }
+    bool CheckAfter(uint32_t value) const { return ((value * 0xc4a4ece1) >> 31) & 1; }
+    bool CheckOlder(uint32_t value) const { return ((value * 0xb9ccd5f9) >> 31) & 1; }
 
     // Signature challenges fulfilled with a dummy signature, if it was one of our dummy keys.
     miniscript::Availability Sign(const CPubKey& key, std::vector<unsigned char>& sig) const {
@@ -354,9 +354,16 @@ NodeRef GenNode(FuzzedDataProvider& provider, const miniscript::Type typ) {
                     val = provider.ConsumeIntegralInRange<uint32_t>(1, sub.size());
                     break;
                 case NodeType::AFTER:
-                case NodeType::OLDER:
-                    val = provider.ConsumeIntegralInRange<uint32_t>(1, 0x7FFFFFFF);
+                case NodeType::OLDER: {
+                    static constexpr std::array<uint32_t, 32> VALS = {
+                        0x1, 0x5, 0x9, 0xF, 0x11, 0x55, 0x99, 0xFF,
+                        0x111, 0x555, 0x999, 0xFFF, 0x1111, 0x5555, 0x9999, 0xFFFF,
+                        0x11111, 0x55555, 0x99999, 0xFFFFF, 0x111111, 0x555555, 0x999999, 0xFFFFFF,
+                        0x1111111, 0x5555555, 0x9999999, 0xFFFFFFF, 0x11111111, 0x33333333, 0x55555555, 0x7FFFFFFF
+                    };
+                    val = PickValue(provider, VALS);
                     break;
+                }
                 case NodeType::SHA256:
                     arg = PickValue(provider, TEST_DATA.sha256);
                     break;
