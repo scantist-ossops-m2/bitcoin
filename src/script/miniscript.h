@@ -269,7 +269,7 @@ struct InputStack {
     //! Concatenate two input stacks.
     friend InputStack operator+(InputStack a, InputStack b);
     //! Choose between two potential input stacks.
-    friend InputStack Choose(InputStack a, InputStack b, bool nonmalleable);
+    friend InputStack Choose(InputStack a, InputStack b);
 };
 
 static const auto ZERO = InputStack(std::vector<unsigned char>());
@@ -760,10 +760,10 @@ public:
 
 
     template<typename Ctx>
-    internal::InputResult ProduceInput(const Ctx& ctx, bool nonmal) const {
+    internal::InputResult ProduceInput(const Ctx& ctx) const {
         using namespace internal;
 
-        auto helper = [&ctx, nonmal](const Node& node, Span<InputResult> subres) -> InputResult {
+        auto helper = [&ctx](const Node& node, Span<InputResult> subres) -> InputResult {
             switch (node.nodetype) {
                 case NodeType::PK_K: {
                     std::vector<unsigned char> sig;
@@ -783,7 +783,7 @@ public:
                         auto sat = InputStack(std::move(sig)).WithSig().Available(avail);
                         std::vector<InputStack> next_sats;
                         next_sats.push_back(sats[0]);
-                        for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back(Choose(sats[j], std::move(sats[j - 1]) + sat, nonmal));
+                        for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back(Choose(sats[j], std::move(sats[j - 1]) + sat));
                         next_sats.push_back(std::move(sats[sats.size() - 1]) + std::move(sat));
                         sats = std::move(next_sats);
                     }
@@ -798,13 +798,15 @@ public:
                         auto& res = subres[subres.size() - i - 1];
                         std::vector<InputStack> next_sats;
                         next_sats.push_back(sats[0] + res.nsat);
-                        for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back(Choose(sats[j] + res.nsat, std::move(sats[j - 1]) + res.sat, nonmal));
+                        for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back(Choose(sats[j] + res.nsat, std::move(sats[j - 1]) + res.sat));
                         next_sats.push_back(std::move(sats[sats.size() - 1]) + std::move(res.sat));
                         sats = std::move(next_sats);
                     }
                     InputStack nsat = INVALID;
                     for (size_t i = 0; i < sats.size(); ++i) {
-                        if (i != node.k) nsat = Choose(std::move(nsat), std::move(sats[i]), nonmal);
+                        // i==k is the satisfaction; i==0 is the canonical dissatisfaction; the rest are non-canonical.
+                        if (i != 0 && i != node.k) sats[i].NonCanon();
+                        if (i != node.k) nsat = Choose(std::move(nsat), std::move(sats[i]));
                     }
                     assert(node.k <= sats.size());
                     return InputResult(std::move(nsat), std::move(sats[node.k]));
@@ -841,28 +843,29 @@ public:
                 }
                 case NodeType::AND_B: {
                     auto& x = subres[0], &y = subres[1];
-                    return InputResult(Choose(Choose(y.nsat + x.nsat, (y.sat + x.nsat).NonCanon(), nonmal), (y.nsat + x.sat).NonCanon(), nonmal), y.sat + x.sat);
+                    return InputResult(Choose(Choose(y.nsat + x.nsat, (y.sat + x.nsat).NonCanon()), (y.nsat + x.sat).NonCanon()), y.sat + x.sat);
                 }
                 case NodeType::OR_B: {
                     auto& x = subres[0], &z = subres[1];
-                    return InputResult(z.nsat + x.nsat, Choose(Choose(z.nsat + x.sat, z.sat + x.nsat, nonmal), (z.sat + x.sat).NonCanon(), nonmal));
+                    // The (sat(Z) sat(X)) solution is overcomplete (attacker can change either into dsat).
+                    return InputResult(z.nsat + x.nsat, Choose(Choose(z.nsat + x.sat, z.sat + x.nsat), (z.sat + x.sat).Malleable()));
                 }
                 case NodeType::OR_C: {
                     auto& x = subres[0], &z = subres[1];
-                    return InputResult(INVALID, Choose(std::move(x.sat), z.sat + x.nsat, nonmal));
+                    return InputResult(INVALID, Choose(std::move(x.sat), z.sat + x.nsat));
                 }
                 case NodeType::OR_D: {
                     auto& x = subres[0], &z = subres[1];
                     auto nsat = z.nsat + x.nsat, sat_l = x.sat, sat_r = z.sat + x.nsat;
-                    return InputResult(z.nsat + x.nsat, Choose(std::move(x.sat), z.sat + x.nsat, nonmal));
+                    return InputResult(z.nsat + x.nsat, Choose(std::move(x.sat), z.sat + x.nsat));
                 }
                 case NodeType::OR_I: {
                     auto& x = subres[0], &z = subres[1];
-                    return InputResult(Choose(x.nsat + ONE, z.nsat + ZERO, nonmal), Choose(x.sat + ONE, z.sat + ZERO, nonmal));
+                    return InputResult(Choose(x.nsat + ONE, z.nsat + ZERO), Choose(x.sat + ONE, z.sat + ZERO));
                 }
                 case NodeType::ANDOR: {
                     auto& x = subres[0], &y = subres[1], &z = subres[2];
-                    return InputResult(Choose((y.nsat + x.sat).NonCanon(), z.nsat + x.nsat, nonmal), Choose(y.sat + x.sat, z.sat + x.nsat, nonmal));
+                    return InputResult(Choose((y.nsat + x.sat).NonCanon(), z.nsat + x.nsat), Choose(y.sat + x.sat, z.sat + x.nsat));
                 }
                 case NodeType::WRAP_A:
                 case NodeType::WRAP_S:
@@ -893,7 +896,7 @@ public:
             return InputResult(INVALID, INVALID);
         };
 
-        auto tester = [&helper, nonmal](const Node& node, Span<InputResult> subres) -> InputResult {
+        auto tester = [&helper](const Node& node, Span<InputResult> subres) -> InputResult {
             auto ret = helper(node, subres);
             // Do a consistency check between the satisfaction code and the type checker
             // (the actual satisfaction code in ProduceInputHelper does not use GetType)
@@ -905,13 +908,11 @@ public:
             if (node.GetType() << "d"_mst) assert(ret.nsat.available != Availability::NO);
             if (node.GetType() << "f"_mst && ret.nsat.available != Availability::NO) assert(ret.nsat.has_sig);
             if (node.GetType() << "s"_mst && ret.sat.available != Availability::NO) assert(ret.sat.has_sig);
-            if (nonmal) {
-                if (node.GetType() << "d"_mst) assert(!ret.nsat.has_sig);
-                if (node.GetType() << "d"_mst && !ret.nsat.malleable) assert(!ret.nsat.non_canon);
-                if (node.GetType() << "e"_mst) assert(!ret.nsat.malleable);
-                if (node.GetType() << "m"_mst && ret.sat.available != Availability::NO) assert(!ret.sat.malleable);
-                if (ret.sat.available != Availability::NO && !ret.sat.malleable) assert(!ret.sat.non_canon);
-            }
+            if (node.GetType() << "d"_mst) assert(!ret.nsat.has_sig);
+            if (node.GetType() << "d"_mst && !ret.nsat.malleable) assert(!ret.nsat.non_canon);
+            if (node.GetType() << "e"_mst) assert(!ret.nsat.malleable);
+            if (node.GetType() << "m"_mst && ret.sat.available != Availability::NO) assert(!ret.sat.malleable);
+            if (ret.sat.available != Availability::NO && !ret.sat.malleable) assert(!ret.sat.non_canon);
             return ret;
         };
 
@@ -969,7 +970,7 @@ public:
     bool CheckTimeLocksMix() const { return GetType() << "k"_mst; }
 
     //! Do all sanity checks.
-    bool IsSane() const { return IsNonMalleable() && CheckTimeLocksMix() && CheckOpsLimit() && CheckStackSize() && IsValid(); }
+    bool IsSane() const { return CheckTimeLocksMix() && CheckOpsLimit() && CheckStackSize() && IsValid(); }
 
     //! Check whether this node is safe as a script on its own.
     bool IsSaneTopLevel() const { return IsValidTopLevel() && IsSane() && NeedsSignature(); }
@@ -977,7 +978,7 @@ public:
     //! Produce a witness for this script, if possible and given the information available in the context.
     template<typename Ctx>
     Availability Satisfy(const Ctx& ctx, std::vector<std::vector<unsigned char>>& stack, bool nonmalleable = true) const {
-        auto ret = ProduceInput(ctx, nonmalleable);
+        auto ret = ProduceInput(ctx);
         if (nonmalleable && (ret.sat.malleable || !ret.sat.has_sig)) return Availability::NO;
         stack = std::move(ret.sat.stack);
         return ret.sat.available;

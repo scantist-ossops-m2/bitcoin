@@ -429,24 +429,25 @@ FUZZ_TARGET_INIT(miniscript_random, initialize_miniscript_random)
     assert(parsed);
     assert(*parsed == *node);
 
-
-    // Check both malleable and non-malleable satisfaction. Note that we only assert the produced witness
+    // Test non-malleable satisfaction. Note that we only assert the produced witness
     // is valid if the Miniscript was sane, as otherwise it could overflow the limits.
     CScriptWitness witness;
     const CScript script_pubkey = CScript() << OP_0 << WitnessV0ScriptHash(script);
-    const bool mal_success = node->Satisfy(SATISFIER_CTX, witness.stack, false) == miniscript::Availability::YES;
-    if (mal_success && node->IsSaneTopLevel()) {
-        witness.stack.push_back(std::vector<unsigned char>(script.begin(), script.end()));
-        assert(VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX));
-    }
-    witness.stack.clear();
     const bool nonmal_success = node->Satisfy(SATISFIER_CTX, witness.stack, true) == miniscript::Availability::YES;
     if (nonmal_success && node->IsSaneTopLevel()) {
         witness.stack.push_back(std::vector<unsigned char>(script.begin(), script.end()));
         assert(VerifyScript(DUMMY_SCRIPTSIG, script_pubkey, &witness, STANDARD_SCRIPT_VERIFY_FLAGS, CHECKER_CTX));
     }
-    // If a nonmalleable solution exists, a solution whatsoever must also exist.
+    auto nonmal_stack = std::move(witness.stack);
+
+    // Test malleable satisfaction. We don't care about it actually validating because
+    // the guarantee for malleable signing being valid only holds if the script is
+    // nonmalleable, in which case both malleable and non-malleable signing must
+    // produce the same satisfaction.
+    witness.stack.clear();
+    const bool mal_success = node->Satisfy(SATISFIER_CTX, witness.stack, false) == miniscript::Availability::YES;
+    if (mal_success) {
+        if (node->IsNonMalleable()) assert(nonmal_stack == witness.stack);
+    }
     assert(mal_success >= nonmal_success);
-    // If a miniscript is nonmalleable and needs a signature, and a solution exists, a non-malleable solution must also exist.
-    if (node->IsNonMalleable() && node->NeedsSignature()) assert(nonmal_success == mal_success);
 }
