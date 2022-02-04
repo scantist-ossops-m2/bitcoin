@@ -43,27 +43,29 @@ struct TestData {
 
             dummy_keys.push_back(pubkey);
             dummy_keys_map.insert({pubkey.GetID(), pubkey});
-            std::vector<unsigned char> sig;
-            privkey.Sign(uint256S(""), sig);
-            sig.push_back(1); // SIGHASH_ALL
-            dummy_sigs.insert({pubkey, sig});
+            if (i & 1) {
+                std::vector<unsigned char> sig;
+                privkey.Sign(uint256S(""), sig);
+                sig.push_back(1); // SIGHASH_ALL
+                dummy_sigs.insert({pubkey, sig});
+            }
 
             std::vector<unsigned char> hash;
             hash.resize(32);
             CSHA256().Write(keydata, 32).Finalize(hash.data());
             sha256.push_back(hash);
-            sha256_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            if (i & 1) sha256_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
             CHash256().Write(keydata).Finalize(hash);
             hash256.push_back(hash);
-            hash256_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            if (i & 1) hash256_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
             hash.resize(20);
             CRIPEMD160().Write(keydata, 32).Finalize(hash.data());
             assert(hash.size() == 20);
             ripemd160.push_back(hash);
-            ripemd160_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            if (i & 1) ripemd160_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
             CHash160().Write(keydata).Finalize(hash);
             hash160.push_back(hash);
-            hash160_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
+            if (i & 1) hash160_preimages[hash] = std::vector<unsigned char>(keydata, keydata + 32);
         }
     }
 };
