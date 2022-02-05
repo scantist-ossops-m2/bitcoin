@@ -224,12 +224,21 @@ NodeRef GenNode(FuzzedDataProvider& provider, const miniscript::Type typ) {
         if (!todo.back().info.has_value()) {
             // NodeType/children have not been decided yet. Decide them.
 
+            // If no bytes remain in provider, abort. This prevents infinite loops
+            // in case a read zero (for fragcode) results in a recursive rule triggering.
+            if (provider.remaining_bytes() == 0) return {};
             // Not all type properties are implemented in the match logic below,
             // so strip away the ones we cannot discern. When the node is actually
             // constructed, we compare the full requested type properties.
             typ = typ & "BVWKzondu"_mst;
-            // Helper for computing the child nodes' type properties.
+            // Some helpers for computing the child nodes' type properties.
             auto basetype = "BVK"_mst & typ;
+            auto typ_z = typ & "z"_mst;
+            auto z_if_typ_o = "z"_mst.If(typ << "o"_mst);
+            auto typ_o = typ & "o"_mst;
+            auto typ_n = typ & "n"_mst;
+            auto typ_d = typ & "d"_mst;
+            auto typ_u = typ & "u"_mst;
 
             // Fragcode selects which of the (applicable) matching rules below is selected.
             // Every rule, if it matches, checks if fragcode has reached 0, and if so,
@@ -269,39 +278,39 @@ NodeRef GenNode(FuzzedDataProvider& provider, const miniscript::Type typ) {
                 } else if ("Bndu"_mst << typ && ++candidates && !(fragcode--)) {
                     Plan(todo, NodeType::MULTI); // multi
                 } else if ("Wdu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::WRAP_A, "B"_mst); // a:
+                    Plan(todo, NodeType::WRAP_A, "B"_mst | typ_d | typ_u); // a:
                 } else if ("Wdu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::WRAP_S, "Bo"_mst); // s:
+                    Plan(todo, NodeType::WRAP_S, "Bo"_mst | typ_d | typ_u); // s:
                 } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::WRAP_C, "K"_mst); // c:
+                    Plan(todo, NodeType::WRAP_C, "K"_mst | typ_o | typ_n | typ_d); // c:
                 } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
                     Plan(todo, NodeType::WRAP_D, "Vz"_mst); // d:
                 } else if ("Vzon"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::WRAP_V, "B"_mst); // d:
+                    Plan(todo, NodeType::WRAP_V, "B"_mst | typ_z | typ_o | typ_n); // v:
                 } else if ("Bondu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::WRAP_J, "Bn"_mst); // j:
+                    Plan(todo, NodeType::WRAP_J, "Bn"_mst | typ_o | typ_u); // j:
                 } else if ("Bzondu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::WRAP_N, "B"_mst); // n:
+                    Plan(todo, NodeType::WRAP_N, "B"_mst | typ_z | typ_o | typ_n | typ_d); // n:
                 } else if ("Boud"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::OR_I, NodeType::JUST_0, "B"_mst); // l:
+                    Plan(todo, NodeType::OR_I, NodeType::JUST_0, "B"_mst | typ_u | z_if_typ_o); // l:
                 } else if ("Boud"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::OR_I, "B"_mst, NodeType::JUST_0); // u:
+                    Plan(todo, NodeType::OR_I, "B"_mst | typ_u | z_if_typ_o, NodeType::JUST_0); // u:
                 } else if ("BVKzonu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::AND_V, "V"_mst, basetype); // and_v
+                    Plan(todo, NodeType::AND_V, "V"_mst | typ_z, basetype | typ_z | typ_u); // and_v
                 } else if ("Bzondu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::AND_B, "B"_mst, "W"_mst); // and_b
+                    Plan(todo, NodeType::AND_B, "B"_mst | typ_z | typ_d, "W"_mst | typ_z | typ_d); // and_b
                 } else if ("Bzoud"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::ANDOR, "Bdu"_mst, basetype, NodeType::JUST_0); // and_n
+                    Plan(todo, NodeType::ANDOR, "Bdu"_mst | typ_z, basetype | typ_z | typ_u, NodeType::JUST_0); // and_n
                 } else if ("Bzodu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::OR_B, "Bd"_mst, "Wd"_mst); // or_b
+                    Plan(todo, NodeType::OR_B, "Bd"_mst | typ_z, "Wd"_mst | typ_z); // or_b
                 } else if ("Vzo"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::OR_C, "Bdu"_mst, "V"_mst); // or_c
+                    Plan(todo, NodeType::OR_C, "Bdu"_mst | typ_z | typ_o, "V"_mst | typ_z | z_if_typ_o); // or_c
                 } else if ("Bzodu"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::OR_D, "Bdu"_mst, "B"_mst); // or_d
+                    Plan(todo, NodeType::OR_D, "Bdu"_mst | typ_z | typ_o, "B"_mst | typ_z | typ_d | typ_u | z_if_typ_o); // or_d
                 } else if ("BKVoud"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::OR_I, basetype, basetype); // or_i
+                    Plan(todo, NodeType::OR_I, basetype | z_if_typ_o | typ_u, basetype | z_if_typ_o | typ_u); // or_i
                 } else if ("BVKzoud"_mst << typ && ++candidates && !(fragcode--)) {
-                    Plan(todo, NodeType::ANDOR, "Bdu"_mst, basetype, basetype); // andor
+                    Plan(todo, NodeType::ANDOR, "Bdu"_mst | typ_z, basetype | typ_z | typ_u, basetype | typ_z | typ_u | typ_d); // andor
                 } else if ("Bzodu"_mst << typ && ++candidates && !(fragcode--)) {
                     // thresh()
                     auto children = provider.ConsumeIntegralInRange<uint32_t>(1, MAX_OPS_PER_SCRIPT / 2);
