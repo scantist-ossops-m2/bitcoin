@@ -230,8 +230,6 @@ void AddrManImpl::Unserialize(Stream& s_)
 {
     LOCK(cs);
 
-    assert(vRandom.empty());
-
     Format format;
     s_ >> Using<CustomUintFormatter<1>>(format);
 
@@ -282,8 +280,6 @@ void AddrManImpl::Unserialize(Stream& s_)
         AddrInfo& info = mapInfo[n];
         s >> info;
         mapAddr[info] = n;
-        info.nRandomPos = vRandom.size();
-        vRandom.push_back(n);
     }
     nIdCount = nNew;
 
@@ -296,9 +292,7 @@ void AddrManImpl::Unserialize(Stream& s_)
         int nKBucketPos = info.GetBucketPosition(nKey, false, nKBucket);
         if (info.IsValid()
                 && vvTried[nKBucket][nKBucketPos] == -1) {
-            info.nRandomPos = vRandom.size();
             info.fInTried = true;
-            vRandom.push_back(nIdCount);
             mapInfo[nIdCount] = info;
             mapAddr[info] = nIdCount;
             vvTried[nKBucket][nKBucketPos] = nIdCount;
@@ -419,35 +413,9 @@ AddrInfo* AddrManImpl::Create(const CAddress& addr, const CNetAddr& addrSource, 
     int nId = nIdCount++;
     mapInfo[nId] = AddrInfo(addr, addrSource);
     mapAddr[addr] = nId;
-    mapInfo[nId].nRandomPos = vRandom.size();
-    vRandom.push_back(nId);
     if (pnId)
         *pnId = nId;
     return &mapInfo[nId];
-}
-
-void AddrManImpl::SwapRandom(unsigned int nRndPos1, unsigned int nRndPos2) const
-{
-    AssertLockHeld(cs);
-
-    if (nRndPos1 == nRndPos2)
-        return;
-
-    assert(nRndPos1 < vRandom.size() && nRndPos2 < vRandom.size());
-
-    int nId1 = vRandom[nRndPos1];
-    int nId2 = vRandom[nRndPos2];
-
-    const auto it_1{mapInfo.find(nId1)};
-    const auto it_2{mapInfo.find(nId2)};
-    assert(it_1 != mapInfo.end());
-    assert(it_2 != mapInfo.end());
-
-    it_1->second.nRandomPos = nRndPos2;
-    it_2->second.nRandomPos = nRndPos1;
-
-    vRandom[nRndPos1] = nId2;
-    vRandom[nRndPos2] = nId1;
 }
 
 void AddrManImpl::Delete(int nId)
@@ -459,8 +427,6 @@ void AddrManImpl::Delete(int nId)
     assert(!info.fInTried);
     assert(info.nRefCount == 0);
 
-    SwapRandom(info.nRandomPos, vRandom.size() - 1);
-    vRandom.pop_back();
     mapAddr.erase(info);
     mapInfo.erase(nId);
     nNew--;
@@ -704,8 +670,6 @@ std::pair<CAddress, int64_t> AddrManImpl::Select_(bool newOnly) const
 {
     AssertLockHeld(cs);
 
-    if (vRandom.empty()) return {};
-
     if (newOnly && nNew == 0) return {};
 
     // Use a 50% chance for choosing between tried and new table entries.
@@ -773,7 +737,7 @@ std::vector<CAddress> AddrManImpl::GetAddr_(size_t max_addresses, size_t max_pct
 {
     AssertLockHeld(cs);
 
-    size_t nNodes = vRandom.size();
+    size_t nNodes = nNew + nTried;
     if (max_pct != 0) {
         nNodes = max_pct * nNodes / 100;
     }
@@ -784,25 +748,26 @@ std::vector<CAddress> AddrManImpl::GetAddr_(size_t max_addresses, size_t max_pct
     // gather a list of random nodes, skipping those of low quality
     const int64_t now{GetAdjustedTime()};
     std::vector<CAddress> addresses;
-    for (unsigned int n = 0; n < vRandom.size(); n++) {
-        if (addresses.size() >= nNodes)
-            break;
 
-        int nRndPos = insecure_rand.randrange(vRandom.size() - n) + n;
-        SwapRandom(n, nRndPos);
-        const auto it{mapInfo.find(vRandom[n])};
-        assert(it != mapInfo.end());
-
-        const AddrInfo& ai{it->second};
-
+    size_t explored = 0;
+    for (const auto& [_, ai] : mapInfo) {
         // Filter by network (optional)
         if (network != std::nullopt && ai.GetNetClass() != network) continue;
 
         // Filter for quality
         if (ai.IsTerrible(now)) continue;
 
-        addresses.push_back(ai);
+        ++explored;
+        if (explored <= nNodes) {
+            addresses.push_back(ai);
+            if (explored == nNodes) Shuffle(addresses.begin(), addresses.end(), insecure_rand);
+        } else {
+            size_t pos = insecure_rand.randrange(explored);
+            if (pos < nNodes) addresses[pos] = ai;
+        }
     }
+    if (explored < nNodes) Shuffle(addresses.begin(), addresses.end(), insecure_rand);
+
     LogPrint(BCLog::ADDRMAN, "GetAddr returned %d random addresses\n", addresses.size());
     return addresses;
 }
@@ -973,13 +938,10 @@ int AddrManImpl::CheckAddrman() const
     AssertLockHeld(cs);
 
     LOG_TIME_MILLIS_WITH_CATEGORY_MSG_ONCE(
-        strprintf("new %i, tried %i, total %u", nNew, nTried, vRandom.size()), BCLog::ADDRMAN);
+        strprintf("new %i, tried %i, total %u", nNew, nTried, nNew + nTried), BCLog::ADDRMAN);
 
     std::unordered_set<int> setTried;
     std::unordered_map<int, int> mapNew;
-
-    if (vRandom.size() != (size_t)(nTried + nNew))
-        return -7;
 
     for (const auto& entry : mapInfo) {
         int n = entry.first;
@@ -1001,8 +963,6 @@ int AddrManImpl::CheckAddrman() const
         if (it == mapAddr.end() || it->second != n) {
             return -5;
         }
-        if (info.nRandomPos < 0 || (size_t)info.nRandomPos >= vRandom.size() || vRandom[info.nRandomPos] != n)
-            return -14;
         if (info.nLastTry < 0)
             return -6;
         if (info.nLastSuccess < 0)
@@ -1059,7 +1019,7 @@ int AddrManImpl::CheckAddrman() const
 size_t AddrManImpl::size() const
 {
     LOCK(cs); // TODO: Cache this in an atomic to avoid this overhead
-    return vRandom.size();
+    return nNew + nTried;
 }
 
 bool AddrManImpl::Add(const std::vector<CAddress>& vAddr, const CNetAddr& source, int64_t nTimePenalty)
