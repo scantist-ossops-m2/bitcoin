@@ -521,6 +521,16 @@ static RPCHelpMan getnettotals()
                            {RPCResult::Type::NUM, "bytes_left_in_cycle", "Bytes left in current time cycle"},
                            {RPCResult::Type::NUM, "time_left_in_cycle", "Seconds left in current time cycle"},
                         }},
+                       {RPCResult::Type::OBJ_DYN, "msg_stats", "Statistics about message sizes per connection type",
+                       {
+                           {RPCResult::Type::OBJ, "conn_type", "",
+                               {
+                               {RPCResult::Type::NUM, "msg_in", "Number of messages received in this connection type"},
+                               {RPCResult::Type::NUM, "payload_in", "Number of payload bytes received in this connection type"},
+                               {RPCResult::Type::NUM, "msg_out", "Number of messages sent in this connection type"},
+                               {RPCResult::Type::NUM, "payload_out", "Number of payload bytes sent in this connection type"},
+                            }}
+                         }}
                     }
                 },
                 RPCExamples{
@@ -545,6 +555,18 @@ static RPCHelpMan getnettotals()
     outboundLimit.pushKV("bytes_left_in_cycle", connman.GetOutboundTargetBytesLeft());
     outboundLimit.pushKV("time_left_in_cycle", count_seconds(connman.GetMaxOutboundTimeLeftInCycle()));
     obj.pushKV("uploadtarget", outboundLimit);
+
+    auto stats = GetMsgStatsMap();
+    UniValue stobj(UniValue::VOBJ);
+    for (const auto& [conntype, stat] : stats) {
+        UniValue sobj(UniValue::VOBJ);
+        sobj.pushKV("msg_in", stat.msg_in);
+        sobj.pushKV("payload_in", stat.payload_in);
+        sobj.pushKV("msg_out", stat.msg_out);
+        sobj.pushKV("payload_out", stat.payload_out);
+        stobj.pushKV(std::string(ConnectionTypeAsString(conntype)), std::move(sobj));
+    }
+    obj.pushKV("msg_stats", std::move(stobj));
     return obj;
 },
     };

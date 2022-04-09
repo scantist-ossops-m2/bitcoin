@@ -1314,4 +1314,15 @@ struct NodeEvictionCandidate
  */
 void ProtectEvictionCandidatesByRatio(std::vector<NodeEvictionCandidate>& vEvictionCandidates);
 
+struct MsgStats {
+    uint64_t msg_in{0};
+    uint64_t msg_out{0};
+    uint64_t payload_in{0};
+    uint64_t payload_out{0};
+};
+
+using MsgStatsMap = std::map<ConnectionType, MsgStats>;
+
+MsgStatsMap GetMsgStatsMap();
+
 #endif // BITCOIN_NET_H

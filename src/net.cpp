@@ -118,6 +118,9 @@ std::map<CNetAddr, LocalServiceInfo> mapLocalHost GUARDED_BY(g_maplocalhost_mute
 static bool vfLimited[NET_MAX] GUARDED_BY(g_maplocalhost_mutex) = {};
 std::string strSubVersion;
 
+static std::mutex g_cs_msgstats;
+static MsgStatsMap g_msgstats;
+
 void CConnman::AddAddrFetch(const std::string& strDest)
 {
     LOCK(m_addr_fetches_mutex);
@@ -687,6 +690,12 @@ bool CNode::ReceiveMsgBytes(Span<const uint8_t> msg_bytes, bool& complete)
                 // Message deserialization failed.  Drop the message but don't disconnect the peer.
                 // store the size of the corrupt message
                 mapRecvBytesPerMsgCmd.at(NET_MESSAGE_COMMAND_OTHER) += msg.m_raw_message_size;
+                {
+                    std::unique_lock<std::mutex> lock(g_cs_msgstats);
+                    auto& stats = g_msgstats[m_conn_type];
+                    stats.msg_in += 1;
+                    stats.payload_in += msg.m_message_size;
+                }
                 continue;
             }
 
@@ -698,6 +707,12 @@ bool CNode::ReceiveMsgBytes(Span<const uint8_t> msg_bytes, bool& complete)
             }
             assert(i != mapRecvBytesPerMsgCmd.end());
             i->second += msg.m_raw_message_size;
+            {
+                std::unique_lock<std::mutex> lock(g_cs_msgstats);
+                auto& stats = g_msgstats[m_conn_type];
+                stats.msg_in += 1;
+                stats.payload_in += msg.m_message_size;
+            }
 
             // push the message to the process queue,
             vRecvMsg.push_back(std::move(msg));
@@ -3033,6 +3048,7 @@ bool CConnman::NodeFullyConnected(const CNode* pnode)
     return pnode && pnode->fSuccessfullyConnected && !pnode->fDisconnect;
 }
 
+
 void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
 {
     size_t nMessageSize = msg.data.size();
@@ -3063,6 +3079,12 @@ void CConnman::PushMessage(CNode* pnode, CSerializedNetMsg&& msg)
         //log total amount of bytes per message type
         pnode->mapSendBytesPerMsgCmd[msg.m_type] += nTotalSize;
         pnode->nSendSize += nTotalSize;
+        {
+            std::unique_lock<std::mutex> lock(g_cs_msgstats);
+            auto& stats = g_msgstats[pnode->m_conn_type];
+            stats.msg_out += 1;
+            stats.payload_out += nMessageSize;
+        }
 
         if (pnode->nSendSize > nSendBufferMaxSize) pnode->fPauseSend = true;
         pnode->vSendMsg.push_back(std::move(serializedHeader));
@@ -3135,3 +3157,9 @@ std::function<void(const CAddress& addr,
                    Span<const unsigned char> data,
                    bool is_incoming)>
     CaptureMessage = CaptureMessageToFile;
+
+MsgStatsMap GetMsgStatsMap()
+{
+    std::unique_lock<std::mutex> lock(g_cs_msgstats);
+    return g_msgstats;
+}
