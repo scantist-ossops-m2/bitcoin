@@ -13,7 +13,9 @@
 class ChaCha20
 {
 private:
-    uint32_t input[16];
+    uint32_t m_key[8];
+    uint64_t m_nonce;
+    uint64_t m_block_counter;
 
 public:
     ChaCha20();
