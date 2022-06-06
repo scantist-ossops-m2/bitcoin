@@ -298,4 +298,55 @@ bool Random_SanityCheck();
  */
 void RandomInit();
 
+
+/** Xoroshiro128++ PRNG. Extremely fast, not appropriate for cryptographic purposes.
+ *
+ * See https://prng.di.unimi.it/
+ *
+ * This class is not thread-safe.
+ */
+class Xoroshiro128pp
+{
+    uint64_t s[2] = {1, 0};
+
+    constexpr uint64_t rotl(uint64_t x, int n) { return (x << n) | (x >> (64 - n)); }
+
+public:
+
+    using result_type = uint64_t;
+
+    constexpr void seed(uint64_t seedval) noexcept
+    {
+        // This is effectively SplitMix64 inlined to produce s[0], s[1] as output.
+        for (int i = 0; i < 2; ++i) {
+            uint64_t z = (seedval += 0x9e3779b97f4a7c15);
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111eb;
+            s[i] = z ^ (z >> 31);
+        }
+    }
+
+    constexpr Xoroshiro128pp(uint64_t seedval = 0) noexcept
+    {
+        seed(seedval);
+    }
+
+    Xoroshiro128pp(const Xoroshiro128pp&) = delete;
+    Xoroshiro128pp& operator=(const Xoroshiro128pp&) = delete;
+
+    constexpr result_type operator()() noexcept
+    {
+        uint64_t s0 = s[0], s1 = s[1];
+        const uint64_t result = rotl(s0 + s1, 17) + s0;
+        s1 ^= s0;
+        s[0] = rotl(s0, 49) ^ s1 ^ (s1 << 21);
+        s[1] = rotl(s1, 28);
+        return result;
+    }
+
+    static constexpr result_type min() noexcept { return std::numeric_limits<uint64_t>::min(); }
+    static constexpr result_type max() noexcept { return std::numeric_limits<uint64_t>::max(); }
+    constexpr static double entropy() noexcept { return 0.0; }
+};
+
 #endif // BITCOIN_RANDOM_H
