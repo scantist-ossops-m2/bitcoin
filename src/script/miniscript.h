@@ -1030,6 +1030,11 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
 {
     using namespace spanparsing;
 
+    // Account for the number of fragments we started to parse. Any fragment is at least one byte
+    // long. If we started to parse more than 3600 of them, don't bother continuing: the resulting
+    // Miniscript would be invalid.
+    size_t opened_frags = 0;
+
     // The two integers are used to hold state for thresh()
     std::vector<std::tuple<ParseContext, int64_t, int64_t>> to_parse;
     std::vector<NodeRef<Key>> constructed;
@@ -1037,22 +1042,27 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
     to_parse.emplace_back(ParseContext::WRAPPED_EXPR, -1, -1);
 
     while (!to_parse.empty()) {
+        if (opened_frags > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
+
         // Get the current context we are decoding within
         auto [cur_context, n, k] = to_parse.back();
         to_parse.pop_back();
 
         switch (cur_context) {
         case ParseContext::WRAPPED_EXPR: {
-            int colon_index = -1;
-            for (int i = 1; i < (int)in.size(); ++i) {
+            std::optional<size_t> colon_index{};
+            for (size_t i = 1; i < in.size(); ++i) {
                 if (in[i] == ':') {
                     colon_index = i;
                     break;
                 }
                 if (in[i] < 'a' || in[i] > 'z') break;
+                if (i > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
             }
             // If there is no colon, this loop won't execute
-            for (int j = 0; j < colon_index; ++j) {
+            for (size_t j = 0; colon_index && j < *colon_index; ++j) {
+                if (++opened_frags > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
+
                 if (in[j] == 'a') {
                     to_parse.emplace_back(ParseContext::ALT, -1, -1);
                 } else if (in[j] == 's') {
@@ -1080,7 +1090,7 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
                 }
             }
             to_parse.emplace_back(ParseContext::EXPR, -1, -1);
-            in = in.subspan(colon_index + 1);
+            if (colon_index) in = in.subspan(*colon_index + 1);
             break;
         }
         case ParseContext::EXPR: {
@@ -1212,6 +1222,7 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
                 to_parse.emplace_back(ParseContext::COMMA, -1, -1);
                 to_parse.emplace_back(ParseContext::WRAPPED_EXPR, -1, -1);
             }
+            opened_frags++;
             break;
         }
         case ParseContext::ALT: {
@@ -1779,6 +1790,8 @@ inline NodeRef<typename Ctx::Key> FromString(const std::string& str, const Ctx& 
 template<typename Ctx>
 inline NodeRef<typename Ctx::Key> FromScript(const CScript& script, const Ctx& ctx) {
     using namespace internal;
+    // A too large Script is necessarily invalid, don't bother parsing it.
+    if (script.size() > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
     auto decomposed = DecomposeScript(script);
     if (!decomposed) return {};
     auto it = decomposed->begin();
