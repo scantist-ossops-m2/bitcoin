@@ -143,4 +143,88 @@ BOOST_AUTO_TEST_CASE(shuffle_stat_test)
     BOOST_CHECK_EQUAL(sum, 12000U);
 }
 
+// Test that if next(a) == b, then next(x) == b for all x in [a,b).
+BOOST_AUTO_TEST_CASE(poisson_rand_consistency_test)
+{
+    for (int i = 0; i < 1000; ++i) {
+        PoissonProcessRandom rng{std::chrono::seconds{1 + i}, InsecureRandBits(64), InsecureRandBits(64)};
+        for (int j = 0; j < 10; ++j) {
+            std::chrono::microseconds now{InsecureRandBits(55)};
+            auto next = rng.Next(now);
+            BOOST_CHECK(next > now);
+            for (int k = 0; k < 10; ++k) {
+                auto test = now + std::chrono::microseconds{InsecureRandRange((next - now).count())};
+                BOOST_CHECK(next == rng.Next(test));
+            }
+        }
+    }
+}
+
+namespace {
+
+template<bool CONSEC, long ITERS>
+void PoissonRandStatTest(int seconds)
+{
+    // Construct a random Poisson process with average interval seconds seconds.
+    PoissonProcessRandom rng{std::chrono::seconds{seconds}, InsecureRandBits(64), InsecureRandBits(64)};
+    // Accumulator s_i is the sum of the i'th powers of the observed durations (in multiples of seconds).
+    double s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0;
+    // Start at a random timestamp.
+    std::chrono::microseconds now{InsecureRandBits(55)};
+    // Generate ITERS events.
+    for (unsigned long j = 0; j < ITERS; ++j) {
+        auto next = rng.Next(now);
+        // Accumulate powers into s_i for i=1..6.
+        double val = std::chrono::duration_cast<std::chrono::duration<double>>(next - now) / std::chrono::seconds{seconds};
+        double val2 = val * val;
+        double val3 = val * val2;
+        s1 += val;
+        s2 += val2;
+        s3 += val3;
+        s4 += val2 * val2;
+        s5 += val2 * val3;
+        s6 += val3 * val3;
+        if constexpr (CONSEC) {
+            // If CONSEC==true, look at the delay for the immediately next event.
+            now = next;
+        } else {
+            // If CONSEC==false, look at the delay until the next event after uniformly generated points.
+            now = std::chrono::microseconds{InsecureRandBits(55)};
+        }
+    }
+    // In the expressions above:
+    // - val^1 should have mean 1, variance 1
+    // - val^2 should have mean 2, variance 20
+    // - val^3 should have mean 6, variance 684
+    // - val^4 should have mean 24, variance 39744
+    // - val^5 should have mean 120, variance 3614400
+    // - val^6 should have mean 720, variance 478483200
+    // Test that the sum of ITERS of them fall within 10 standard deviations of
+    // the expected value.
+    BOOST_CHECK(fabs(s1 - ITERS * 1.0) < 10 * sqrt(ITERS * 1.0));
+    BOOST_CHECK(fabs(s2 - ITERS * 2.0) < 10 * sqrt(ITERS * 20.0));
+    BOOST_CHECK(fabs(s3 - ITERS * 6.0) < 10 * sqrt(ITERS * 684.0));
+    BOOST_CHECK(fabs(s4 - ITERS * 24.0) < 10 * sqrt(ITERS * 39744.0));
+    BOOST_CHECK(fabs(s5 - ITERS * 120.0) < 10 * sqrt(ITERS * 3614400.0));
+    BOOST_CHECK(fabs(s6 - ITERS * 720.0) < 10 * sqrt(ITERS * 478483200.0));
+}
+
+} // namespace
+
+// Test statistical properties of consecutive Poisson events.
+BOOST_AUTO_TEST_CASE(poisson_rand_stat_consec_test)
+{
+    for (int i = 0; i < 10; ++i) {
+        PoissonRandStatTest<true, 1000000>(i + 1);
+    }
+}
+
+// Test statistical properties of independent Poisson events.
+BOOST_AUTO_TEST_CASE(poisson_rand_stat_sep_test)
+{
+    for (int i = 0; i < 10; ++i) {
+        PoissonRandStatTest<false, 1000000>(i + 1);
+    }
+}
+
 BOOST_AUTO_TEST_SUITE_END()

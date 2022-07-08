@@ -6,6 +6,7 @@
 #include <random.h>
 
 #include <compat/cpuid.h>
+#include <crypto/siphash.h>
 #include <crypto/sha256.h>
 #include <crypto/sha512.h>
 #include <support/cleanse.h>
@@ -19,8 +20,10 @@
 #include <span.h>
 #include <sync.h>     // for Mutex
 #include <util/time.h> // for GetTimeMicros()
+#include <util/fastrange.h>
 
 #include <cmath>
+#include <optional>
 #include <stdlib.h>
 #include <thread>
 
@@ -710,4 +713,59 @@ std::chrono::microseconds GetExponentialRand(std::chrono::microseconds now, std:
 {
     double unscaled = -std::log1p(GetRand(uint64_t{1} << 48) * -0.0000000000000035527136788 /* -1/2^48 */);
     return now + std::chrono::duration_cast<std::chrono::microseconds>(unscaled * average_interval + 0.5us);
+}
+
+PoissonProcessRandom::PoissonProcessRandom(std::chrono::seconds average_interval) :
+    m_k0(GetRand<uint64_t>()), m_k1(GetRand<uint64_t>()), m_interval(average_interval) {}
+
+PoissonProcessRandom::PoissonProcessRandom(std::chrono::seconds average_interval, uint64_t k0, uint64_t k1) :
+    m_k0(k0), m_k1(k1), m_interval(average_interval) {}
+
+std::chrono::microseconds PoissonProcessRandom::Next(std::chrono::microseconds now)
+{
+    // Increment to convert "first after" into "first not less than".
+    now += 1us;
+
+    // In what follows, the timeline is divided into "periods", each exactly m_interval
+    // long. Compute what period we are in now.
+    uint64_t period = now / m_interval;
+    // Each period is subdivided into m_interval.count() jiffies of 1us long. Compute
+    // which jiffy in the current period the now timestamp corresponds to.
+    std::chrono::microseconds now_jiffy = now - period * m_interval;
+
+    while (true) {
+        // CDF of Poisson(lambda=1), rescaled by 2^64.
+        static constexpr uint64_t DIST[] = {
+            0x5e2d58d8b3bcdf1b, 0xbc5ab1b16779be35, 0xeb715e1dc1582dc3, 0xfb23979734a252f2,
+            0xff1025f59174dc3e, 0xffd90f3ba4055e1a, 0xfffa8b71fc72c914, 0xffff540c0914b3ca,
+            0xffffed1f4aa8f120, 0xfffffe216e641463, 0xffffffd4d85d3183, 0xfffffffc6da262b5,
+            0xffffffffba12d179, 0xfffffffffb07c64d, 0xffffffffffab8ea5, 0xfffffffffffabe22,
+            0xffffffffffffb11a, 0xfffffffffffffba1, 0xffffffffffffffc5, 0xfffffffffffffffd
+        };
+        // Compute the number of events within the current period. This is Poisson(lambda=1)
+        // distributed. Use a deterministically random value and search through the CDF
+        // to get a Poisson distributed value num_events.
+        uint64_t rand = CSipHasher(m_k0, m_k1).Write(period * 21).Finalize();
+        int num_events;
+        for (num_events = 0; num_events < 20; ++num_events) {
+            if (rand < DIST[num_events]) break;
+        }
+        // Generate num_events, remembering the first one not less than now_jiffy.
+        std::optional<std::chrono::microseconds> next_jiffy{};
+        for (int i = 0; i < num_events; ++i) {
+            // Generate deterministically random value.
+            uint64_t rand = CSipHasher(m_k0, m_k1).Write(period * 21 + 1 + i).Finalize();
+            // Map into the range of jiffies this period.
+            std::chrono::microseconds event_jiffy{FastRange64(rand, m_interval.count())};
+            if (event_jiffy >= now_jiffy) {
+                if (!next_jiffy || event_jiffy < *next_jiffy) next_jiffy = event_jiffy;
+            }
+        }
+        // If one is found, convert back to std::chrono::microseconds and return.
+        if (next_jiffy.has_value()) return m_interval * period + *next_jiffy;
+        // If no event in the current period happens, or all of them predate now_jiffy, continue with
+        // the next period. Any event in that period is ok, so set now_jiffy to 0.
+        ++period;
+        now_jiffy = 0us;
+    }
 }
