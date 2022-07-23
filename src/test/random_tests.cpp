@@ -187,14 +187,12 @@ void PoissonRandStatTest(const std::chrono::seconds avg_interval)
     // Construct a random Poisson process with average interval seconds seconds.
     PoissonProcessRandom rng{avg_interval, InsecureRandBits(64), InsecureRandBits(64)};
     // Accumulator s_i is the sum of the i'th powers of the observed durations (in multiples of avg_interval).
-    long double s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0, s5 = 0.0, s6 = 0.0;
-    // Count frequency of all buckets.
-    uint64_t bucket[64] = {0};
-    uint64_t bucket2[64][64] = {{0}};
+    long double sums[8] = {0.0L, 0.0L, 0.0L, 0.0L, 0.0L, 0.0L, 0.0L, 0.0L};
+    uint64_t buckets[64] = {0};
+    long double bucket_sums[64][8] = {{0.0L}};
     // Start at a random timestamp.
     std::chrono::microseconds now{InsecureRandBits(53)};
     // Generate ITERS events.
-    unsigned long since_reset = 0;
     int prev_cdf = -1;
     for (unsigned long j = 0; j < ITERS; ++j) {
         auto next = rng.Next(now);
@@ -202,80 +200,101 @@ void PoissonRandStatTest(const std::chrono::seconds avg_interval)
         long double val = std::chrono::duration_cast<std::chrono::duration<long double>>(next - now) / avg_interval;
         // Find which CDF bucket it falls into.
         int cdf = std::upper_bound(std::begin(EXPDIST_INVCDF) + 1, std::end(EXPDIST_INVCDF), val) - (std::begin(EXPDIST_INVCDF) + 1);
+        long double p1 = (val -  1.0L);
+        long double p2 = (val -  3.0L) * p1 - 1.0L;
+        long double p3 = (val -  5.0L) * p2 - 4.0L * p1;
+        long double p4 = (val -  7.0L) * p3 - 9.0L * p2;
+        long double p5 = (val -  9.0L) * p4 - 16.0L * p3;
+        long double p6 = (val - 11.0L) * p5 - 25.0L * p4;
+        long double p7 = (val - 13.0L) * p6 - 36.0L * p5;
+        long double p8 = (val - 15.0L) * p7 - 49.0L * p6;
+        sums[0] += p1;
+        sums[1] += p2;
+        sums[2] += p3;
+        sums[3] += p4;
+        sums[4] += p5;
+        sums[5] += p6;
+        sums[6] += p7;
+        sums[7] += p8;
         if (prev_cdf != -1) {
-            bucket[cdf] += 1;
-            bucket2[prev_cdf][cdf] += 1;
+            buckets[prev_cdf] += 1;
+            bucket_sums[prev_cdf][0] += p1;
+            bucket_sums[prev_cdf][1] += p2;
+            bucket_sums[prev_cdf][2] += p3;
+            bucket_sums[prev_cdf][3] += p4;
+            bucket_sums[prev_cdf][4] += p5;
+            bucket_sums[prev_cdf][5] += p6;
+            bucket_sums[prev_cdf][6] += p7;
+            bucket_sums[prev_cdf][7] += p8;
         }
         prev_cdf = cdf;
-        // Accumulate powers into s_i for i=1..6.
-        long double val2 = val * val, val3 = val * val2;
-        s1 += val;
-        s2 += val2;
-        s3 += val3;
-        s4 += val2 * val2;
-        s5 += val2 * val3;
-        s6 += val3 * val3;
-        ++since_reset;
-        if constexpr (CONSEC) {
-            // If CONSEC==true, look at the delay for the immediately next event.
-            now = next;
-            // Unless there is a risk that'd take us past the 2^55 limit of std::chrono::microseconds.
-            // In that case, start over with a new RNG.
-            if (std::chrono::microseconds{0x7FFFFFFFFFFFFF} - now < 50 * avg_interval) {
-                now = std::chrono::microseconds{InsecureRandBits(54)};
-                rng = PoissonProcessRandom{avg_interval, InsecureRandBits(64), InsecureRandBits(64)};
-                since_reset = 0;
-            }
-        } else {
-            // If CONSEC==false, look at the delay until the next event after uniformly generated points.
-            now = std::chrono::microseconds{InsecureRandBits(53)};
-            if (since_reset * since_reset * avg_interval > std::chrono::microseconds{0x3FFFFFFFFFFFFF}) {
-                rng = PoissonProcessRandom{avg_interval, InsecureRandBits(64), InsecureRandBits(64)};
-                since_reset = 0;
-            }
+        now = next;
+        if constexpr (!CONSEC) {
+            now += std::chrono::microseconds{InsecureRandRange((6 * avg_interval).count())};
+        }
+        if (std::chrono::microseconds{0x7FFFFFFFFFFFFF} - now < 60 * avg_interval) {
+            now = std::chrono::microseconds{InsecureRandBits(54)};
+            rng = PoissonProcessRandom{avg_interval, InsecureRandBits(64), InsecureRandBits(64)};
         }
     }
-    // In the expressions above:
-    // - val^1 should have mean 1, variance 1
-    // - val^2 should have mean 2, variance 20
-    // - val^3 should have mean 6, variance 684
-    // - val^4 should have mean 24, variance 39744
-    // - val^5 should have mean 120, variance 3614400
-    // - val^6 should have mean 720, variance 478483200
-    // Test that the sum of ITERS of them fall within 10 standard deviations of
-    // the expected value.
-    fprintf(stderr, "s1: %Lg (%Lg sigma)\n", s1 / (ITERS * 1.0L) - 1.0L, (s1 - ITERS * 1.0L) / sqrtl(ITERS * 1.0L));
-    fprintf(stderr, "s2: %Lg (%Lg sigma)\n", s2 / (ITERS * 2.0L) - 1.0L, (s2 - ITERS * 2.0L) / sqrtl(ITERS * 20.0L));
-    fprintf(stderr, "s3: %Lg (%Lg sigma)\n", s3 / (ITERS * 6.0L) - 1.0L, (s3 - ITERS * 6.0L) / sqrtl(ITERS * 684.0L));
-    fprintf(stderr, "s4: %Lg (%Lg sigma)\n", s4 / (ITERS * 24.0L) - 1.0L, (s4 - ITERS * 24.0L) / sqrtl(ITERS * 39744.0L));
-    fprintf(stderr, "s5: %Lg (%Lg sigma)\n", s5 / (ITERS * 120.0L) - 1.0L, (s5 - ITERS * 120.0L) / sqrtl(ITERS * 3614400.0L));
-    fprintf(stderr, "s6: %Lg (%Lg sigma)\n", s6 / (ITERS * 720.0L) - 1.0L, (s6 - ITERS * 720.0L) / sqrtl(ITERS * 478483200.0L));
+/*
+    fprintf(stderr, "s1: %Lg sigma\n", sums[0] / sqrtl(ITERS * 1.0L));
+    fprintf(stderr, "s2: %Lg sigma\n", sums[1] / sqrtl(ITERS * 4.0L));
+    fprintf(stderr, "s3: %Lg sigma\n", sums[2] / sqrtl(ITERS * 36.0L));
+    fprintf(stderr, "s4: %Lg sigma\n", sums[3] / sqrtl(ITERS * 576.0L));
+    fprintf(stderr, "s5: %Lg sigma\n", sums[4] / sqrtl(ITERS * 14400.0L));
+    fprintf(stderr, "s6: %Lg sigma\n", sums[5] / sqrtl(ITERS * 518400.0L));
+    fprintf(stderr, "s7: %Lg sigma\n", sums[6] / sqrtl(ITERS * 25401600.0L));
+    fprintf(stderr, "s8: %Lg sigma\n", sums[7] / sqrtl(ITERS * 1625702400.0L));
+*/
+    BOOST_CHECK(fabsl(sums[0]) < 10.0L * sqrtl(ITERS * 1.0L));
+    BOOST_CHECK(fabsl(sums[1]) < 10.0L * sqrtl(ITERS * 4.0L));
+    BOOST_CHECK(fabsl(sums[2]) < 10.0L * sqrtl(ITERS * 36.0L));
+    BOOST_CHECK(fabsl(sums[3]) < 10.0L * sqrtl(ITERS * 576.0L));
+    BOOST_CHECK(fabsl(sums[4]) < 10.0L * sqrtl(ITERS * 14400.0L));
+    BOOST_CHECK(fabsl(sums[5]) < 10.0L * sqrtl(ITERS * 518400.0L));
+    BOOST_CHECK(fabsl(sums[6]) < 10.0L * sqrtl(ITERS * 25401600.0L));
+    BOOST_CHECK(fabsl(sums[7]) < 10.0L * sqrtl(ITERS * 1625702400.0L));
+
+    for (int i = 0; i < 64; ++i) {
+        constexpr long double exp = (ITERS - 1) / 64.0L;
+        constexpr long double stddev = sqrtl((ITERS - 1) * (63.0L / 4096.0L));
+        long double stddiff = (buckets[i] - exp) / stddev;
+/*
+        fprintf(stderr, "c%i: %Lg sigma\n", i, stddiff);
+*/
+        BOOST_CHECK(fabsl(stddiff) < 10.0L);
+    }
+
+    for (int i = 0; i < 64; ++i) {
+/*
+        fprintf(stderr, "c%i s1: %Lg sigma\n", i, bucket_sums[i][0] / sqrtl(buckets[i] * 1.0L));
+        fprintf(stderr, "c%i s2: %Lg sigma\n", i, bucket_sums[i][1] / sqrtl(buckets[i] * 4.0L));
+        fprintf(stderr, "c%i s3: %Lg sigma\n", i, bucket_sums[i][2] / sqrtl(buckets[i] * 36.0L));
+        fprintf(stderr, "c%i s4: %Lg sigma\n", i, bucket_sums[i][3] / sqrtl(buckets[i] * 576.0L));
+        fprintf(stderr, "c%i s5: %Lg sigma\n", i, bucket_sums[i][4] / sqrtl(buckets[i] * 14400.0L));
+        fprintf(stderr, "c%i s6: %Lg sigma\n", i, bucket_sums[i][5] / sqrtl(buckets[i] * 518400.0L));
+        fprintf(stderr, "c%i s7: %Lg sigma\n", i, bucket_sums[i][6] / sqrtl(buckets[i] * 25401600.0L));
+        fprintf(stderr, "c%i s8: %Lg sigma\n", i, bucket_sums[i][7] / sqrtl(buckets[i] * 1625702400.0L));
+*/
+        BOOST_CHECK(fabsl(bucket_sums[i][0]) < 10.0 * sqrtl(buckets[i] * 1.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][1]) < 10.0 * sqrtl(buckets[i] * 4.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][2]) < 10.0 * sqrtl(buckets[i] * 36.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][3]) < 10.0 * sqrtl(buckets[i] * 576.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][4]) < 10.0 * sqrtl(buckets[i] * 14400.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][5]) < 10.0 * sqrtl(buckets[i] * 518400.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][6]) < 10.0 * sqrtl(buckets[i] * 25401600.0L));
+        BOOST_CHECK(fabsl(bucket_sums[i][7]) < 10.0 * sqrtl(buckets[i] * 1625702400.0L));
+    }
+
+/*
     BOOST_CHECK(fabsl(s1 - ITERS * 1.0L) < 10.0L * sqrtl(ITERS * 1.0L));
     BOOST_CHECK(fabsl(s2 - ITERS * 2.0L) < 10.0L * sqrtl(ITERS * 20.0L));
     BOOST_CHECK(fabsl(s3 - ITERS * 6.0L) < 10.0L * sqrtl(ITERS * 684.0L));
     BOOST_CHECK(fabsl(s4 - ITERS * 24.0L) < 10.0L * sqrtl(ITERS * 39744.0L));
     BOOST_CHECK(fabsl(s5 - ITERS * 120.0L) < 10.0L * sqrtl(ITERS * 3614400.0L));
     BOOST_CHECK(fabsl(s6 - ITERS * 720.0L) < 10.0L * sqrtl(ITERS * 478483200.0L));
-    for (int i = 0; i < 64; ++i) {
-        constexpr long double exp = (ITERS - 1) / 64.0L;
-        constexpr long double stddev = sqrtl((ITERS - 1) * (63.0L / 4096.0L));
-        long double stddiff = (bucket[i] - exp) / stddev;
-        if (fabsl(stddiff) >= 5.0L) {
-            fprintf(stderr, "c%i: %Lg sigma\n", i, stddiff);
-        }
-        BOOST_CHECK(fabsl(stddiff) < 10.0L);
-    }
-    for (int i = 0; i < 64; ++i) {
-        long double exp = bucket[i] / 64.0L;
-        long double stddev = sqrtl(bucket[i] * (63.0L / 4096.0L));
-        for (int j = 0; j < 64; ++j) {
-            long double stddiff = (bucket2[i][j] - exp) / stddev;
-            if (fabsl(stddiff) >= 5.0L) {
-                fprintf(stderr, "c%i,%i: %Lg sigma\n", i, j, stddiff);
-            }
-            BOOST_CHECK(fabsl(stddiff) < 10.0L);
-        }
-    }
+*/
 }
 
 } // namespace
@@ -283,18 +302,18 @@ void PoissonRandStatTest(const std::chrono::seconds avg_interval)
 // Test statistical properties of consecutive Poisson events.
 BOOST_AUTO_TEST_CASE(poisson_rand_stat_consec_test)
 {
-    for (int i = 23; i < 31; ++i) {
+    for (int i = 0; i < 26; ++i) {
         fprintf(stderr, "consec %i\n", i);
-        PoissonRandStatTest<true, 10000000*60L>(std::chrono::seconds{1 << i});
+        PoissonRandStatTest<true, 1000000000L>(std::chrono::seconds{1 << i});
     }
 }
 
 // Test statistical properties of independent Poisson events.
 BOOST_AUTO_TEST_CASE(poisson_rand_stat_sep_test)
 {
-    for (int i = 23; i < 31; ++i) {
+    for (int i = 0; i < 26; ++i) {
         fprintf(stderr, "sep %i\n", i);
-        PoissonRandStatTest<false, 10000000*60L>(std::chrono::seconds{1 << i});
+        PoissonRandStatTest<false, 1000000000L>(std::chrono::seconds{1 << i});
     }
 }
 
