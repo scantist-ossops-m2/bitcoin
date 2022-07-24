@@ -54,6 +54,8 @@ std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlock
     // longer than this.
     m_max_commitments = 6*(GetAdjustedTime() - chain_start->GetMedianTimePast() + MAX_FUTURE_BLOCK_TIME) / HEADER_COMMITMENT_FREQUENCY;
 
+    LogPrint(BCLog::HEADERSYNC, "Starting header sync for peer=%i: startheight=%i minwork=%s maxcommit=%i\n", m_id, m_current_height, m_minimum_required_work.ToString(), m_max_commitments);
+
     if (!ValidateAndStoreHeadersCommitments(initial_headers)) {
         return std::nullopt;
     }
@@ -90,6 +92,7 @@ std::optional<CBlockLocator> HeadersSyncState::ProcessNextHeaders(const std::vec
             Finalize();
             return std::nullopt;
         }
+        LogPrint(BCLog::HEADERSYNC, "Processing %i headers from peer=%i at height=%i in initial phase (commitments=%i)\n", headers.size(), m_id, m_current_height, m_header_commitments.size());
         if (!ValidateAndStoreHeadersCommitments(headers)) {
             // The headers didn't pass validation; give up on the sync.
             return std::nullopt;
@@ -112,6 +115,7 @@ std::optional<CBlockLocator> HeadersSyncState::ProcessNextHeaders(const std::vec
         // receive, and add headers to our redownload buffer. When the buffer
         // gets big enough (meaning that we've checked enough commitments),
         // we'll return a batch of headers to the caller for processing.
+        LogPrint(BCLog::HEADERSYNC, "Processing %i headers from peer=%i at height=%i in redownload phase (commitments=%i, buffer=%i)\n", headers.size(), m_id, m_redownload_buffer_last_height, m_header_commitments.size(), m_redownloaded_headers.size());
         for (const auto& hdr : headers) {
             if (!ValidateAndStoreRedownloadedHeader(hdr)) {
                 // Something went wrong -- the peer gave us an unexpected chain.
@@ -176,6 +180,7 @@ bool HeadersSyncState::ValidateAndStoreHeadersCommitments(const std::vector<CBlo
 
     if (m_current_chain_work >= m_minimum_required_work) {
         m_blockhash_with_sufficient_work = headers.back().GetHash();
+        LogPrint(BCLog::HEADERSYNC, "Header sync from peer=%i reached sufficient work=%s at block=%s height=%i\n", m_id, m_minimum_required_work.ToString(), m_blockhash_with_sufficient_work.ToString(), m_current_height);
         m_redownloaded_headers.clear();
         m_redownload_buffer_last_height = m_chain_start->nHeight;
         m_redownload_buffer_first_prev_hash = m_chain_start->GetBlockHash();
@@ -200,15 +205,17 @@ bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& previo
         }
     }
 
-    if (!CheckProofOfWork(current.GetHash(), current.nBits, m_consensus_params)) return false;
+    uint256 hash = current.GetHash();
+    if (!CheckProofOfWork(hash, current.nBits, m_consensus_params)) return false;
 
     if ((current_height - m_chain_start->nHeight) % HEADER_COMMITMENT_FREQUENCY == 0) {
         // Try to add a commitment.
-        m_header_commitments.push_back(m_hasher(current.GetHash()) & 1);
+        m_header_commitments.push_back(m_hasher(hash) & 1);
+        LogPrint(BCLog::HEADERSYNC, "Adding headers commitment peer=%i block=%s height=%i\n", m_id, hash.ToString(), current_height);
         if (m_header_commitments.size() > m_max_commitments) {
             // The peer's chain is too long; give up.
             // TODO: disconnect this peer.
-            LogPrint(BCLog::NET, "headers chain is too long; giving up sync peer=%d\n", m_id);
+            LogPrint(BCLog::HEADERSYNC, "headers chain is too long; giving up sync peer=%d\n", m_id);
             return false;
         }
     }
@@ -235,11 +242,12 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     }
 
     int64_t next_height = m_redownload_buffer_last_height + 1;
+    uint256 hash = header.GetHash();
 
     // If we're at a header for which we previously stored a commitment, verify
     // it is correct. Failure will result in aborting download.
     if ((next_height - m_chain_start->nHeight) % HEADER_COMMITMENT_FREQUENCY == 0) {
-         bool commitment = m_hasher(header.GetHash()) & 1;
+         bool commitment = m_hasher(hash) & 1;
          if (m_header_commitments.size() == 0) {
             // Somehow our peer managed to feed us a different chain and
             // we've run out of commitments.
@@ -247,6 +255,7 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
         }
         bool expected_commitment = m_header_commitments.front();
         m_header_commitments.pop_front();
+        LogPrint(BCLog::HEADERSYNC, "Verifying headers commitment peer=%i block=%s height=%i\n", m_id, hash.ToString(), next_height);
         if (commitment != expected_commitment) {
             return false;
         }
@@ -255,11 +264,12 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     // Store this header for later processing.
     m_redownloaded_headers.push_back(header);
     m_redownload_buffer_last_height = next_height;
-    m_redownload_buffer_last_hash = header.GetHash();
+    m_redownload_buffer_last_hash = hash;
 
     // If we're processing our target block header, which we verified has
     // sufficient work, then set a flag for processing all remaining headers.
-    if (header.GetHash() == m_blockhash_with_sufficient_work) {
+    if (hash == m_blockhash_with_sufficient_work) {
+        LogPrint(BCLog::HEADERSYNC, "Reached block=%s height=%i with sufficient work, releasing everything (peer=%i)\n", hash.ToString(), next_height, m_id);
         m_process_all_remaining_headers = true;
     }
     return true;
@@ -276,6 +286,7 @@ std::vector<CBlockHeader> HeadersSyncState::RemoveHeadersReadyForAcceptance()
         m_redownloaded_headers.pop_front();
         m_redownload_buffer_first_prev_hash = ret.back().GetHash();
     }
+    LogPrint(BCLog::HEADERSYNC, "Releasing %i buffered headers from peerid=%i for processing\n", ret.size(), m_id);
     return ret;
 }
 

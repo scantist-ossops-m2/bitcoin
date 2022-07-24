@@ -165,6 +165,7 @@ const CLogCategoryDesc LogCategories[] =
 #endif
     {BCLog::UTIL, "util"},
     {BCLog::BLOCKSTORE, "blockstorage"},
+    {BCLog::HEADERSYNC, "headersync"},
     {BCLog::ALL, "1"},
     {BCLog::ALL, "all"},
 };
@@ -263,6 +264,8 @@ std::string LogCategoryToStr(BCLog::LogFlags category)
         return "util";
     case BCLog::LogFlags::BLOCKSTORE:
         return "blockstorage";
+    case BCLog::LogFlags::HEADERSYNC:
+        return "headersync";
     case BCLog::LogFlags::ALL:
         return "all";
     }
