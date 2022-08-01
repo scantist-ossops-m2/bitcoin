@@ -285,6 +285,24 @@ void PoissonRandStatTest(const std::chrono::seconds avg_interval)
         BOOST_CHECK(fabsl(bucket_sums[i][5]) < 10.0 * sqrtl(buckets[i] * 518400.0L));
         BOOST_CHECK(fabsl(bucket_sums[i][6]) < 10.0 * sqrtl(buckets[i] * 25401600.0L));
         BOOST_CHECK(fabsl(bucket_sums[i][7]) < 10.0 * sqrtl(buckets[i] * 1625702400.0L));
+        if (fabsl(bucket_sums[i][0]) > 10.0 * sqrtl(buckets[i] * 1.0L) ||
+            fabsl(bucket_sums[i][1]) > 10.0 * sqrtl(buckets[i] * 4.0L) ||
+            fabsl(bucket_sums[i][2]) > 10.0 * sqrtl(buckets[i] * 36.0L) ||
+            fabsl(bucket_sums[i][3]) > 10.0 * sqrtl(buckets[i] * 576.0L) ||
+            fabsl(bucket_sums[i][4]) > 10.0 * sqrtl(buckets[i] * 14400.0L) ||
+            fabsl(bucket_sums[i][5]) > 10.0 * sqrtl(buckets[i] * 518400.0L) ||
+            fabsl(bucket_sums[i][6]) > 10.0 * sqrtl(buckets[i] * 25401600.0L) ||
+            fabsl(bucket_sums[i][7]) > 10.0 * sqrtl(buckets[i] * 1625702400.0L)) {
+            fprintf(stderr, "c%i: count=%lu s1=%Lg s2=%Lg s3=%Lg s4=%Lg s5=%Lg s6=%Lg s7=%Lg s8=%Lg\n", i, (unsigned long)buckets[i],
+                bucket_sums[i][0] / sqrtl(buckets[i] * 1.0L),
+                bucket_sums[i][1] / sqrtl(buckets[i] * 4.0L),
+                bucket_sums[i][2] / sqrtl(buckets[i] * 36.0L),
+                bucket_sums[i][3] / sqrtl(buckets[i] * 576.0L),
+                bucket_sums[i][4] / sqrtl(buckets[i] * 14400.0L),
+                bucket_sums[i][5] / sqrtl(buckets[i] * 518400.0L),
+                bucket_sums[i][6] / sqrtl(buckets[i] * 25401600.0L),
+                bucket_sums[i][7] / sqrtl(buckets[i] * 1625702400.0L));
+        }
     }
 
 /*
@@ -304,7 +322,7 @@ BOOST_AUTO_TEST_CASE(poisson_rand_stat_consec_test)
 {
     for (int i = 0; i < 26; ++i) {
         fprintf(stderr, "consec %i\n", i);
-        PoissonRandStatTest<true, 1000000000L>(std::chrono::seconds{1 << i});
+        PoissonRandStatTest<true, 10000L>(std::chrono::seconds{1 << i});
     }
 }
 
@@ -313,7 +331,7 @@ BOOST_AUTO_TEST_CASE(poisson_rand_stat_sep_test)
 {
     for (int i = 0; i < 26; ++i) {
         fprintf(stderr, "sep %i\n", i);
-        PoissonRandStatTest<false, 1000000000L>(std::chrono::seconds{1 << i});
+        PoissonRandStatTest<false, 10000L>(std::chrono::seconds{1 << i});
     }
 }
 
