@@ -130,8 +130,8 @@ public:
             minimum_required_work);
 
     struct ProcessingResult {
-        std::optional<CBlockLocator> locator{std::nullopt};
         std::vector<CBlockHeader> headers_to_process;
+        bool request_more{false};
         bool success{false};
     };
 
@@ -151,6 +151,9 @@ public:
      */
     ProcessingResult ProcessNextHeaders(const std::vector<CBlockHeader>&
             headers, const bool full_headers_message);
+
+    /** Issue the next GETHEADERS message to our peer */
+    CBlockLocator MakeNextHeadersRequest() const;
 
 private:
     /** Clear out all download state that might be in progress (freeing any used
@@ -177,9 +180,6 @@ private:
 
     /** Return a set of headers that satisfy our proof-of-work threshold */
     std::vector<CBlockHeader> RemoveHeadersReadyForAcceptance();
-
-    /** Issue the next GETHEADERS message to our peer */
-    std::optional<CBlockLocator> MakeNextHeadersRequest();
 
 private:
     /** NodeId of the peer (used for log messages) **/
