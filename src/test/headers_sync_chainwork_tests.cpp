@@ -93,7 +93,7 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     // initially and then the rest.
     headers_batch.insert(headers_batch.end(), std::next(first_chain.begin(), 1), first_chain.end());
 
-    (void)hss->StartInitialDownload(chain_start, {first_chain.front()}, chain_work, m_node.chainman->ActiveChain().GetLocator(chain_start));
+    (void)hss->StartInitialDownload(chain_start, {first_chain.front()}, chain_work);
     auto result = hss->ProcessNextHeaders(headers_batch, true);
 
     // This chain should look valid, and we should have met the proof-of-work
@@ -109,8 +109,7 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     hss.reset(new HeadersSyncState(0, Params().GetConsensus()));
 
     // Now try again, this time feeding the first chain twice.
-    (void)hss->StartInitialDownload(chain_start, first_chain, chain_work,
-            m_node.chainman->ActiveChain().GetLocator(chain_start));
+    (void)hss->StartInitialDownload(chain_start, first_chain, chain_work);
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::REDOWNLOAD);
 
     result = hss->ProcessNextHeaders(first_chain, true);
@@ -125,7 +124,7 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     // Finally, verify that just trying to process the second chain would not
     // succeed (too little work)
     (void)hss->StartInitialDownload(chain_start, {second_chain.front()},
-            chain_work, m_node.chainman->ActiveChain().GetLocator(chain_start));
+            chain_work);
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::INITIAL_DOWNLOAD);
 
     headers_batch.clear();

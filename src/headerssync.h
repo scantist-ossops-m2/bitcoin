@@ -127,7 +127,7 @@ public:
      */
     std::optional<CBlockLocator> StartInitialDownload(const CBlockIndex* chain_start, const
             std::vector<CBlockHeader>& initial_headers, const arith_uint256&
-            minimum_required_work, CBlockLocator&& chain_start_locator);
+            minimum_required_work);
 
     struct ProcessingResult {
         std::optional<CBlockLocator> locator{std::nullopt};
@@ -190,10 +190,6 @@ private:
 
     /** Store the last block in our block index that the peer's chain builds from */
     const CBlockIndex* m_chain_start{nullptr};
-
-    /** Cache the block locator for m_chain_start, since we use this in every
-     * getheaders request */
-    CBlockLocator m_chain_start_locator;
 
     /** Minimum work that we're looking for on this chain. */
     arith_uint256 m_minimum_required_work;

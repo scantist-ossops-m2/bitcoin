@@ -36,7 +36,6 @@ void HeadersSyncState::Finalize()
     m_redownload_buffer_first_prev_hash.SetNull();
     m_process_all_remaining_headers = false;
     m_current_height = 0;
-    std::vector<uint256>().swap(m_chain_start_locator.vHave);
 
     m_download_state = State::FINAL;
 }
@@ -45,7 +44,7 @@ void HeadersSyncState::Finalize()
  * batch, and request more headers. */
 std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlockIndex* chain_start,
         const std::vector<CBlockHeader>& initial_headers, const arith_uint256&
-        minimum_required_work, CBlockLocator&& chain_start_locator)
+        minimum_required_work)
 {
     // A new instance of this object should be instantiated for every headers
     // sync, so that we don't reuse our salted hasher between syncs.
@@ -56,7 +55,6 @@ std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlock
     m_minimum_required_work = minimum_required_work;
     m_current_chain_work = chain_start->nChainWork;
     m_current_height = chain_start->nHeight;
-    m_chain_start_locator = std::move(chain_start_locator);
 
     m_last_header_received = m_chain_start->GetBlockHeader();
 
@@ -329,7 +327,8 @@ std::optional<CBlockLocator> HeadersSyncState::MakeNextHeadersRequest()
         locator.push_back(m_redownload_buffer_last_hash);
     }
 
-    locator.insert(locator.end(), m_chain_start_locator.vHave.begin(),
-            m_chain_start_locator.vHave.end());
+    auto start_locator = GetLocator(m_chain_start);
+    locator.insert(locator.end(), start_locator.vHave.begin(),
+            start_locator.vHave.end());
     return CBlockLocator(std::move(locator));
 }

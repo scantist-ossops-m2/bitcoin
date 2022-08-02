@@ -2458,8 +2458,7 @@ bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlo
             peer.m_headers_sync.reset(new HeadersSyncState(peer.m_id, m_chainparams.GetConsensus()));
             if (std::optional<CBlockLocator> locator =
                     peer.m_headers_sync->StartInitialDownload(chain_start_header,
-                        headers, minimum_chain_work,
-                        m_chainman.ActiveChain().GetLocator(chain_start_header)))
+                        headers, minimum_chain_work))
             {
                 Assume(!locator->vHave.empty());
                 if (!locator->vHave.empty() && MaybeSendGetHeaders(pfrom, *locator, peer)) {
