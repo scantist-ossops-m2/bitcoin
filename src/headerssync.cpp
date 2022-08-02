@@ -28,7 +28,6 @@ void HeadersSyncState::Finalize()
     Assume(m_download_state != State::FINAL);
     m_header_commitments.clear();
     m_last_header_received.SetNull();
-    m_blockhash_with_sufficient_work.SetNull();
     std::deque<CompressedHeader>().swap(m_redownloaded_headers);
     m_redownload_buffer_last_hash.SetNull();
     m_redownload_buffer_first_prev_hash.SetNull();
@@ -184,11 +183,11 @@ bool HeadersSyncState::ValidateAndStoreHeadersCommitments(const std::vector<CBlo
     }
 
     if (m_current_chain_work >= m_minimum_required_work) {
-        m_blockhash_with_sufficient_work = headers.back().GetHash();
         m_redownloaded_headers.clear();
         m_redownload_buffer_last_height = m_chain_start->nHeight;
         m_redownload_buffer_first_prev_hash = m_chain_start->GetBlockHash();
         m_redownload_buffer_last_hash = m_chain_start->GetBlockHash();
+        m_redownload_chain_work = m_chain_start->nChainWork;
         m_download_state = State::REDOWNLOAD;
     }
     return true;
@@ -244,6 +243,26 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
 
     int64_t next_height = m_redownload_buffer_last_height + 1;
 
+    // Check that the difficulty adjustments are within our tolerance:
+    uint32_t previous_nBits{0};
+    if (!m_redownloaded_headers.empty()) {
+        previous_nBits = m_redownloaded_headers.back().nBits;
+    } else {
+        previous_nBits = m_chain_start->nBits;
+    }
+
+    if (!PermittedDifficultyTransition(m_consensus_params, next_height,
+                previous_nBits, header.nBits)) {
+        return false;
+    }
+
+    // Track work on the redownloaded chain
+    m_redownload_chain_work += GetBlockProof(CBlockIndex(header));
+
+    if (m_redownload_chain_work >= m_minimum_required_work) {
+        m_process_all_remaining_headers = true;
+    }
+
     // If we're at a header for which we previously stored a commitment, verify
     // it is correct. Failure will result in aborting download.
     // Also, don't check commitments once we've gotten to our target blockhash;
@@ -269,11 +288,6 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     m_redownload_buffer_last_height = next_height;
     m_redownload_buffer_last_hash = header.GetHash();
 
-    // If we're processing our target block header, which we verified has
-    // sufficient work, then set a flag for processing all remaining headers.
-    if (header.GetHash() == m_blockhash_with_sufficient_work) {
-        m_process_all_remaining_headers = true;
-    }
     return true;
 }
 

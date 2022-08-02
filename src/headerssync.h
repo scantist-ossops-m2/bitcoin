@@ -220,11 +220,6 @@ private:
     /** Height of m_last_header_received */
     int64_t m_current_height{0}; // height of last header received
 
-    /** Once we've gotten to a target block with sufficient work, save it for
-     *  later.
-     */
-    uint256 m_blockhash_with_sufficient_work;
-
     /** During phase 2 (REDOWNLOAD), we buffer redownloaded headers in memory
      *  until enough commitments have been verified; those are stored in
      *  m_redownloaded_headers */
@@ -243,6 +238,9 @@ private:
      * processing.
      */
     uint256 m_redownload_buffer_first_prev_hash;
+
+    /** The accumulated work on the redownloaded chain. */
+    arith_uint256 m_redownload_chain_work;
 
     /** Set this to true once we encounter the target blockheader during phase
      * 2 (REDOWNLOAD). At this point, we can process and store all remaining
