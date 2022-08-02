@@ -44,7 +44,7 @@ void HeadersSyncState::Finalize()
  * batch, and request more headers. */
 std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlockIndex* chain_start,
         const std::vector<CBlockHeader>& initial_headers, const arith_uint256&
-        minimum_required_work, CBlockLocator&& chain_start_locator)
+        minimum_required_work)
 {
     // A new instance of this object should be instantiated for every headers
     // sync, so that we don't reuse our salted hasher between syncs.
@@ -55,7 +55,7 @@ std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlock
     m_minimum_required_work = minimum_required_work;
     m_current_chain_work = chain_start->nChainWork;
     m_current_height = chain_start->nHeight;
-    m_chain_start_locator = std::move(chain_start_locator);
+    m_chain_start_locator = chain_start->GetLocator();
 
     m_last_header_received = m_chain_start->GetBlockHeader();
 

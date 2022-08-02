@@ -127,7 +127,7 @@ public:
      */
     std::optional<CBlockLocator> StartInitialDownload(const CBlockIndex* chain_start, const
             std::vector<CBlockHeader>& initial_headers, const arith_uint256&
-            minimum_required_work, CBlockLocator&& chain_start_locator);
+            minimum_required_work);
 
     struct ProcessingResult {
         std::optional<CBlockLocator> locator{std::nullopt};
