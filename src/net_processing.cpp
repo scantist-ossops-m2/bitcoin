@@ -2391,20 +2391,21 @@ bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfro
 {
     if (peer.m_headers_sync) {
         auto result = peer.m_headers_sync->ProcessNextHeaders(headers, headers.size() == MAX_HEADERS_RESULTS);
-        if (result.locator) {
+        if (result.request_more) {
+            auto locator = peer.m_headers_sync->MakeNextHeadersRequest();
             // If we get back a locator, it should not be empty
-            Assume(!result.locator->vHave.empty());
-            if (!result.locator->vHave.empty()) {
+            Assume(!locator.vHave.empty());
+            if (!locator.vHave.empty()) {
                 // It should be impossible for the getheaders request to fail,
                 // because we should have cleared the last getheaders timestamp
                 // when processing the headers that triggered this call. But
                 // it may be possible to bypass this via compactblock
                 // processing, so check the result before logging just to be
                 // safe.
-                bool sent_getheaders = MaybeSendGetHeaders(pfrom, *result.locator, peer);
+                bool sent_getheaders = MaybeSendGetHeaders(pfrom, locator, peer);
                 if (sent_getheaders) {
                     LogPrint(BCLog::NET, "more getheaders (from %s) to peer=%d\n",
-                            result.locator->vHave.front().ToString(), pfrom.GetId());
+                            locator.vHave.front().ToString(), pfrom.GetId());
                 }
             }
         }

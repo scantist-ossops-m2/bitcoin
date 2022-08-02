@@ -129,10 +129,11 @@ public:
             std::vector<CBlockHeader>& initial_headers, const arith_uint256&
             minimum_required_work);
 
+    /** Result data structure for ProcessNextHeaders. */
     struct ProcessingResult {
-        std::optional<CBlockLocator> locator{std::nullopt};
         std::vector<CBlockHeader> headers_to_process;
         bool success{false};
+        bool request_more{false};
     };
 
     /** Process a batch of headers, once a sync via this mechanism has started
@@ -146,11 +147,14 @@ public:
      *                       headers are on a chain with sufficient work)
      * ProcessingResult.success: set to false if an error is detected and the sync is
      *                       aborted; true otherwise.
-     * ProcessingResult.locator: if present, the next locator to send in a
-     *                       getheaders message
+     * ProcessingResult.request_more: if true, the caller is suggested to call
+     *                       MakeNextHeadersRequest and send a getheaders message using it.
      */
     ProcessingResult ProcessNextHeaders(const std::vector<CBlockHeader>&
-            headers, const bool full_headers_message);
+            headers, bool full_headers_message);
+
+    /** Issue the next GETHEADERS message to our peer */
+    CBlockLocator MakeNextHeadersRequest() const;
 
 private:
     /** Clear out all download state that might be in progress (freeing any used
@@ -177,9 +181,6 @@ private:
 
     /** Return a set of headers that satisfy our proof-of-work threshold */
     std::vector<CBlockHeader> RemoveHeadersReadyForAcceptance();
-
-    /** Issue the next GETHEADERS message to our peer */
-    std::optional<CBlockLocator> MakeNextHeadersRequest();
 
 private:
     /** NodeId of the peer (used for log messages) **/

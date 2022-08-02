@@ -101,7 +101,7 @@ HeadersSyncState::ProcessingResult HeadersSyncState::ProcessNextHeaders(const
             // A full headers message means the peer may have more to give us;
             // also if we just switched to REDOWNLOAD then we need to re-request
             // headers from the beginning.
-            ret.locator = MakeNextHeadersRequest();
+            ret.request_more = true;
             return ret;
         } else {
             // If we're in INITIAL_DOWNLOAD and we get a non-full headers
@@ -139,7 +139,7 @@ HeadersSyncState::ProcessingResult HeadersSyncState::ProcessNextHeaders(const
 
         // If the headers message is full, we need to request more.
         if (full_headers_message) {
-            ret.locator = MakeNextHeadersRequest();
+            ret.request_more = true;
             return ret;
         } else {
             // For some reason our peer gave us a high-work chain, but is now
@@ -308,10 +308,10 @@ std::vector<CBlockHeader> HeadersSyncState::RemoveHeadersReadyForAcceptance()
     return ret;
 }
 
-std::optional<CBlockLocator> HeadersSyncState::MakeNextHeadersRequest()
+CBlockLocator HeadersSyncState::MakeNextHeadersRequest() const
 {
     Assume(m_download_state != State::FINAL);
-    if (m_download_state == State::FINAL) return std::nullopt;
+    if (m_download_state == State::FINAL) return {};
 
     std::vector<uint256> locator;
 
