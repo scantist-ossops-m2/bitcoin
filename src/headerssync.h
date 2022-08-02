@@ -155,6 +155,13 @@ public:
     /** Issue the next GETHEADERS message to our peer */
     CBlockLocator MakeNextHeadersRequest() const;
 
+    /** Find overlap between the committed chain and the chain pointed to by
+     *  index, and advance the starting point forward.
+     *
+     * Should only be called after ProcessNextHeaders, and before MakeNextHeadersRequest.
+     */
+    void SkipAlreadyHave(const CBlockIndex* index);
+
 private:
     /** Clear out all download state that might be in progress (freeing any used
      * memory), and mark this object as no longer usable.

@@ -2390,7 +2390,13 @@ bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfro
 {
     if (peer.m_headers_sync) {
         auto result = peer.m_headers_sync->ProcessNextHeaders(headers, headers.size() == MAX_HEADERS_RESULTS);
-        if (result.request_more) {
+
+        if (peer.m_headers_sync->GetState() != HeadersSyncState::State::FINAL) {
+            LOCK(cs_main);
+            peer.m_headers_sync->SkipAlreadyHave(m_chainman.m_best_header);
+        }
+
+        if (result.request_more && peer.m_headers_sync->GetState() != HeadersSyncState::State::FINAL) {
             auto locator = peer.m_headers_sync->MakeNextHeadersRequest();
             // If we get back a locator, it should not be empty
             Assume(!locator.vHave.empty());

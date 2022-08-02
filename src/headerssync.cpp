@@ -14,6 +14,10 @@ constexpr size_t HEADER_COMMITMENT_FREQUENCY{575};
 //! received and validated against commitments.
 constexpr size_t REDOWNLOAD_BUFFER_SIZE{14216};
 
+//! When checking for overlap with existing known chains, use this many commitment bits
+//! to verify.
+constexpr size_t SKIP_HEADERS_CHECK_BITS{30};
+
 // Our memory analysis assumes 48 bytes for a CompressedHeader (so we should
 // re-calculate parameters if we compress further)
 static_assert(sizeof(CompressedHeader) == 48);
@@ -331,4 +335,65 @@ CBlockLocator HeadersSyncState::MakeNextHeadersRequest() const
     locator.insert(locator.end(), m_chain_start_locator.vHave.begin(),
             m_chain_start_locator.vHave.end());
     return CBlockLocator(std::move(locator));
+}
+
+void HeadersSyncState::SkipAlreadyHave(const CBlockIndex* index)
+{
+    if (m_download_state != State::INITIAL_DOWNLOAD && m_download_state != State::REDOWNLOAD) {
+        return;
+    }
+
+    // In case we're redownloading a chain whose tip we already have, there is nothing left
+    // to synchronize.
+    if (m_download_state == State::REDOWNLOAD &&
+        index->nHeight >= m_current_height &&
+        index->GetAncestor(m_current_height)->GetBlockHash() == m_last_header_received.GetHash()) {
+        Finalize();
+        return;
+    }
+
+    // If we don't even have enough bits to compare, there is nothing to be checked.
+    if (m_header_commitments.size() < SKIP_HEADERS_CHECK_BITS) return;
+
+    // If the chain we already have is not a descendant of this sync's starting point, it is
+    // useless for skipping.
+    if (index->nHeight <= m_chain_start->nHeight ||
+        index->GetAncestor(m_chain_start->nHeight) != m_chain_start) {
+        return;
+    }
+
+    // Determine how many initial commitment bits in m_header_commitments match the chain we have.
+    size_t valid_check_bits = 0;
+    int64_t first_commit_height = (m_chain_start->nHeight / HEADER_COMMITMENT_FREQUENCY + 1) * HEADER_COMMITMENT_FREQUENCY;
+    while (valid_check_bits < m_header_commitments.size()) {
+        int64_t height = first_commit_height + valid_check_bits * HEADER_COMMITMENT_FREQUENCY;
+        if (height > index->nHeight) break;
+        bool bit = m_hasher(index->GetAncestor(height)->GetBlockHash()) & 1;
+        if (bit != m_header_commitments[valid_check_bits]) break;
+        ++valid_check_bits;
+    }
+
+    // Nothing to do if we don't have enough matching bits.
+    if (valid_check_bits < SKIP_HEADERS_CHECK_BITS) return;
+
+    // Update data structures to reflect the new starting point.
+    int64_t new_start_height = first_commit_height + (valid_check_bits - SKIP_HEADERS_CHECK_BITS) * HEADER_COMMITMENT_FREQUENCY;
+    m_header_commitments.erase(m_header_commitments.begin(), m_header_commitments.begin() + valid_check_bits - SKIP_HEADERS_CHECK_BITS + 1);
+    m_chain_start = index->GetAncestor(new_start_height);
+    m_chain_start_locator = m_chain_start->GetLocator();
+    if (m_download_state == State::REDOWNLOAD) {
+        if (m_redownload_buffer_last_height <= new_start_height) {
+            // The new starting point is past all redownloaded headers. Start over.
+            m_redownloaded_headers.clear();
+            m_redownload_buffer_last_height = m_chain_start->nHeight;
+            m_redownload_buffer_first_prev_hash = m_chain_start->GetBlockHash();
+            m_redownload_buffer_last_hash = m_chain_start->GetBlockHash();
+            m_redownload_chain_work = m_chain_start->nChainWork;
+        } else if (new_start_height > m_redownload_buffer_last_height - (int64_t)m_redownloaded_headers.size()) {
+            // Only part of the redownloaded headers remain usable, but its end point does not change.
+            // Only wipe the initial part of them that's now older than the new sync start.
+            m_redownload_buffer_first_prev_hash = m_chain_start->GetBlockHash();
+            m_redownloaded_headers.erase(m_redownloaded_headers.begin(), m_redownloaded_headers.end() - (m_redownload_buffer_last_height - new_start_height));
+        }
+    }
 }
