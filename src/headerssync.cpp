@@ -17,7 +17,8 @@ constexpr size_t REDOWNLOAD_HEADERS_CHECK_BITS{25};
 static_assert(sizeof(CompressedHeader) == 48);
 
 HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus_params) :
-    m_id(id), m_consensus_params(consensus_params)
+    m_id(id), m_consensus_params(consensus_params),
+    m_commit_offset(GetRand<unsigned>(HEADER_COMMITMENT_FREQUENCY))
 { }
 
 /** Free any memory in use, and mark this object as no longer usable. This is
@@ -210,7 +211,7 @@ bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& previo
 
     if (!CheckProofOfWork(current.GetHash(), current.nBits, m_consensus_params)) return false;
 
-    if ((current_height - m_chain_start->nHeight) % HEADER_COMMITMENT_FREQUENCY == 0) {
+    if (current_height % HEADER_COMMITMENT_FREQUENCY == m_commit_offset) {
         // Add a commitment.
         m_header_commitments.push_back(m_hasher(current.GetHash()) & 1);
         if (m_header_commitments.size() > m_max_commitments) {
@@ -269,7 +270,7 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     // it's possible our peer has extended its chain between our first sync and
     // our second, and we don't want to return failure after we've seen our
     // target blockhash just because we ran out of commitments.
-    if (!m_process_all_remaining_headers && (next_height - m_chain_start->nHeight) % HEADER_COMMITMENT_FREQUENCY == 0) {
+    if (!m_process_all_remaining_headers && next_height % HEADER_COMMITMENT_FREQUENCY == m_commit_offset) {
          bool commitment = m_hasher(header.GetHash()) & 1;
          if (m_header_commitments.size() == 0) {
             // Somehow our peer managed to feed us a different chain and

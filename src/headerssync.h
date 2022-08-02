@@ -201,24 +201,23 @@ private:
     /** Work that we've seen so far on the peer's chain */
     arith_uint256 m_current_chain_work;
 
-    /**
-     * m_hasher is a salted hasher for making our 1-bit commitments to headers
-     * we've seen.
-     * m_header_commitments is where we store these 1-bit commitments.
-     * m_max_commitments is a bound we calculate on how long an honest peer's
-     * chain could be, given the MTP rule. Any peer giving us more headers than
-     * this will have its sync aborted. This serves as a memory bound on
-     * m_header_commitments.
-     */
+    /** m_hasher is a salted hasher for making our 1-bit commitments to headers we've seen. */
     const SaltedTxidHasher m_hasher;
 
     /** A queue of commitment bits, created during the 1st phase, and verified during the 2nd. */
     bitdeque<> m_header_commitments;
 
-    /** An upper bound on the number of commitment bits we will accept.
+    /** The (secret) offset on the heights for which to create commitments.
      *
-     * This is calculated at the start of the sync, based on the age of the chain.
-     */
+     * m_header_commitments entries are created at any height h for which
+     * (h % HEADER_COMMITMENT_FREQUENCY) == m_commit_offset. */
+    const unsigned m_commit_offset;
+
+    /** m_max_commitments is a bound we calculate on how long an honest peer's chain could be,
+     * given the MTP rule.
+     *
+     * Any peer giving us more headers than this will have its sync aborted. This serves as a
+     * memory bound on m_header_commitments. */
     uint64_t m_max_commitments{0};
 
     /** Store the latest header received while in INITIAL_DOWNLOAD */
