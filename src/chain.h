@@ -349,6 +349,9 @@ public:
     //! Efficiently find an ancestor of this block.
     CBlockIndex* GetAncestor(int height);
     const CBlockIndex* GetAncestor(int height) const;
+
+    //! Construct a CBlockLocator with this CBlockIndex as tip.
+    CBlockLocator GetLocator() const;
 };
 
 arith_uint256 GetBlockProof(const CBlockIndex& block);
