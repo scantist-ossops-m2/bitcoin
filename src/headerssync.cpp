@@ -212,7 +212,7 @@ bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& previo
 
     if (!CheckProofOfWork(current.GetHash(), current.nBits, m_consensus_params)) return false;
 
-    if ((current_height - m_chain_start->nHeight) % HEADER_COMMITMENT_FREQUENCY == 0) {
+    if (current_height % HEADER_COMMITMENT_FREQUENCY == 0) {
         // Add a commitment.
         m_header_commitments.push_back(m_hasher(current.GetHash()) & 1);
         if (m_header_commitments.size() > m_max_commitments) {
@@ -271,7 +271,7 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     // it's possible our peer has extended its chain between our first sync and
     // our second, and we don't want to return failure after we've seen our
     // target blockhash just because we ran out of commitments.
-    if (!m_process_all_remaining_headers && (next_height - m_chain_start->nHeight) % HEADER_COMMITMENT_FREQUENCY == 0) {
+    if (!m_process_all_remaining_headers && next_height % HEADER_COMMITMENT_FREQUENCY == 0) {
          bool commitment = m_hasher(header.GetHash()) & 1;
          if (m_header_commitments.size() == 0) {
             // Somehow our peer managed to feed us a different chain and
