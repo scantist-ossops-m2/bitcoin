@@ -210,7 +210,7 @@ private:
      * this will have its sync aborted. This serves as a memory bound on
      * m_header_commitments.
      */
-    SaltedTxidHasher m_hasher;
+    const SaltedTxidHasher m_hasher;
     bitdeque<> m_header_commitments;
     uint64_t m_max_commitments{0}; // calculated at start of sync based on age of chain.
 
