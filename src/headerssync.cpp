@@ -4,13 +4,15 @@
 #include <timedata.h>
 #include <util/check.h>
 
-//! Store a commitment to a header every HEADER_COMMITMENT_FREQUENCY blocks
-constexpr size_t HEADER_COMMITMENT_FREQUENCY{571};
+// The two constants below are computed using the simulation script on
+// https://gist.github.com/sipa/016ae445c132cdf65a2791534dfb7ae1
 
-//! Only feed headers to validation once this many commitment bits on top have been checked.
-//! During redownloading, a per-peer buffer with space for
-//! HEADER_COMMITMENT_FREQUENCY * REDOWNLOAD_HEADERS_CHECK_BITS headers will be used.
-constexpr size_t REDOWNLOAD_HEADERS_CHECK_BITS{25};
+//! Store a commitment to a header every HEADER_COMMITMENT_FREQUENCY blocks.
+constexpr size_t HEADER_COMMITMENT_FREQUENCY{584};
+
+//! Only feed headers to validation once this many headers on top have been
+//! received and validated against commitments.
+constexpr size_t REDOWNLOAD_BUFFER_SIZE{13959};
 
 // Our memory analysis assumes 48 bytes for a CompressedHeader (so we should
 // re-calculate parameters if we compress further)
@@ -299,7 +301,7 @@ std::vector<CBlockHeader> HeadersSyncState::RemoveHeadersReadyForAcceptance()
     Assume(m_download_state != State::FINAL);
     if (m_download_state == State::FINAL) return ret;
 
-    while (m_redownloaded_headers.size() > REDOWNLOAD_HEADERS_CHECK_BITS * HEADER_COMMITMENT_FREQUENCY ||
+    while (m_redownloaded_headers.size() > REDOWNLOAD_BUFFER_SIZE ||
             (m_redownloaded_headers.size() > 0 && m_process_all_remaining_headers)) {
         ret.emplace_back(m_redownloaded_headers.front().GetFullHeader(m_redownload_buffer_first_prev_hash));
         m_redownloaded_headers.pop_front();
