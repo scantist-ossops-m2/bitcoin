@@ -177,7 +177,7 @@ bool HeadersSyncState::ValidateAndStoreHeadersCommitments(const std::vector<CBlo
 
     // If it does connect, (minimally) validate and store a commitment to each one.
     for (const auto& hdr : headers) {
-        if (!ValidateAndProcessSingleHeader(m_last_header_received, hdr, m_current_height+1)) {
+        if (!ValidateAndProcessSingleHeader(m_last_header_received, hdr)) {
             Finalize();
             return false;
         }
@@ -194,24 +194,26 @@ bool HeadersSyncState::ValidateAndStoreHeadersCommitments(const std::vector<CBlo
     return true;
 }
 
-bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& previous, const CBlockHeader& current, int64_t current_height)
+bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& previous, const CBlockHeader& current)
 {
     Assume(m_download_state != State::FINAL);
     if (m_download_state == State::FINAL) return false;
+
+    int next_height = m_current_height + 1;
 
     // Verify that the difficulty isn't growing too fast; an adversary with
     // limited hashing capability has a greater chance of producing a high
     // work chain if they compress the work into as few blocks as possible,
     // so don't let anyone give a chain that would violate the difficulty
     // adjustment maximum.
-    if (!PermittedDifficultyTransition(m_consensus_params, current_height,
+    if (!PermittedDifficultyTransition(m_consensus_params, next_height,
                 previous.nBits, current.nBits)) {
         return false;
     }
 
     if (!CheckProofOfWork(current.GetHash(), current.nBits, m_consensus_params)) return false;
 
-    if (current_height % HEADER_COMMITMENT_FREQUENCY == m_commit_offset) {
+    if (next_height % HEADER_COMMITMENT_FREQUENCY == m_commit_offset) {
         // Add a commitment.
         m_header_commitments.push_back(m_hasher(current.GetHash()) & 1);
         if (m_header_commitments.size() > m_max_commitments) {
@@ -226,7 +228,7 @@ bool HeadersSyncState::ValidateAndProcessSingleHeader(const CBlockHeader& previo
 
     m_current_chain_work += GetBlockProof(CBlockIndex(current));
     m_last_header_received = current;
-    ++m_current_height;
+    m_current_height = next_height;
 
     return true;
 }

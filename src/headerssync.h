@@ -179,7 +179,7 @@ private:
 
     /** In INITIAL_DOWNLOAD, process and update state for a single header */
     bool ValidateAndProcessSingleHeader(const CBlockHeader& previous, const
-            CBlockHeader& current, int64_t current_height);
+            CBlockHeader& current);
 
     /** In REDOWNLOAD, check a header's commitment (if applicable) and add to
      * buffer for later processing */
