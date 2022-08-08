@@ -477,4 +477,17 @@ public:
     CBlockIndex* FindEarliestAtLeast(int64_t nTime, int height) const;
 };
 
+/** Get a locator for a block index entry. */
+CBlockLocator GetLocator(const CBlockIndex* index);
+
+/** Construct a list of hash entries to put in a locator, in the form of (chainwork, hash) pairs.
+ *
+ * This function, together with BuildLocator(), gives the ability to construct more customized
+ * locators than just what GetLocator() supports.
+ */
+std::vector<std::pair<arith_uint256, uint256>> LocatorEntries(const CBlockIndex* index);
+
+/** Convert a list of entries into a locator (which need not be sorted). */
+CBlockLocator BuildLocator(std::vector<std::pair<arith_uint256, uint256>>&& entries);
+
 #endif // BITCOIN_CHAIN_H
