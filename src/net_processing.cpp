@@ -2392,8 +2392,16 @@ bool PeerManagerImpl::IsContinuationOfLowWorkHeadersSync(Peer& peer, CNode& pfro
     if (peer.m_headers_sync) {
         auto result = peer.m_headers_sync->ProcessNextHeaders(headers, headers.size() == MAX_HEADERS_RESULTS);
         if (result.request_more) {
-            auto locator = peer.m_headers_sync->MakeNextHeadersRequest();
-            // If we get back a locator, it should not be empty
+            // Use the parent of the best known header as tip to mix into the locator to send out.
+            // This matches the behavior of the initial getheaders locator sent, for the same
+            // reason: making sure we always get information back we can use to prime headers
+            // synchronization structures with. In addition, a mismatch between the two would also
+            // result in synchronization aborting and restarting one block further when continuing
+            // a synchronization with another peer.
+            const CBlockIndex* headers_tip = WITH_LOCK(::cs_main, return m_chainman.m_best_header);
+            if (headers_tip && headers_tip->pprev) headers_tip = headers_tip->pprev;
+            auto locator = peer.m_headers_sync->MakeNextHeadersRequest(headers_tip);
+            // If we were instructed to ask for a locator, it should not be empty.
             Assume(!locator.vHave.empty());
             if (!locator.vHave.empty()) {
                 // It should be impossible for the getheaders request to fail,

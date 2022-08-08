@@ -71,7 +71,7 @@ std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlock
     if (!ValidateAndStoreHeadersCommitments(initial_headers)) {
         return std::nullopt;
     }
-    return MakeNextHeadersRequest();
+    return MakeNextHeadersRequest(nullptr);
 }
 
 /** Process the next batch of headers received from our peer.
@@ -308,27 +308,27 @@ std::vector<CBlockHeader> HeadersSyncState::RemoveHeadersReadyForAcceptance()
     return ret;
 }
 
-CBlockLocator HeadersSyncState::MakeNextHeadersRequest() const
+CBlockLocator HeadersSyncState::MakeNextHeadersRequest(const CBlockIndex* tip) const
 {
     Assume(m_download_state != State::FINAL);
     if (m_download_state == State::FINAL) return {};
 
-    std::vector<uint256> locator;
+    auto entries = LocatorEntries(tip != nullptr ? tip : m_chain_start);
+    if (tip != nullptr) {
+        entries.emplace_back(m_chain_start->nChainWork, m_chain_start->GetBlockHash());
+    }
 
     if (m_download_state == State::INITIAL_DOWNLOAD && !m_last_header_received.IsNull()) {
         // During initial download, we continue from the last header received.
-        locator.push_back(m_last_header_received.GetHash());
+        entries.emplace_back(m_current_chain_work, m_last_header_received.GetHash());
     }
 
     if (m_download_state == State::REDOWNLOAD && !m_redownloaded_headers.empty()) {
         // During redownload, we will either download from the last received
         // header that we stored during the second download phase, or from the
         // fork point (m_chain_start).
-        locator.push_back(m_redownload_buffer_last_hash);
+        entries.emplace_back(m_redownload_chain_work, m_redownload_buffer_last_hash);
     }
 
-    auto start_locator = GetLocator(m_chain_start);
-    locator.insert(locator.end(), start_locator.vHave.begin(),
-            start_locator.vHave.end());
-    return CBlockLocator(std::move(locator));
+    return BuildLocator(std::move(entries));
 }

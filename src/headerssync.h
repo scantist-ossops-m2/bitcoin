@@ -153,8 +153,14 @@ public:
     ProcessingResult ProcessNextHeaders(const std::vector<CBlockHeader>&
             headers, bool full_headers_message);
 
-    /** Issue the next GETHEADERS message to our peer */
-    CBlockLocator MakeNextHeadersRequest() const;
+    /** Issue the next GETHEADERS message to our peer.
+     *
+     * This will return a locator appropriate for the current sync object, to continue the
+     * synchronization phase it is in. If tip is provided, the locator will also have entries from
+     * that tip. This permits the remote party to help us "skip ahead" if our global state has
+     * progressed past where this sync object currently is (because another sync peer was faster,
+     * perhaps). */
+    CBlockLocator MakeNextHeadersRequest(const CBlockIndex* tip) const;
 
 private:
     /** Clear out all download state that might be in progress (freeing any used
