@@ -125,9 +125,8 @@ public:
      *                  has already verified the headers connect)
      * minimum_required_work: amount of chain work required to accept the chain
      */
-    std::optional<CBlockLocator> StartInitialDownload(const CBlockIndex* chain_start, const
-            std::vector<CBlockHeader>& initial_headers, const arith_uint256&
-            minimum_required_work);
+    void StartInitialDownload(const CBlockIndex* chain_start,
+            const arith_uint256& minimum_required_work);
 
     /** Result data structure for ProcessNextHeaders. */
     struct ProcessingResult {

@@ -42,9 +42,8 @@ void HeadersSyncState::Finalize()
 
 /** Initialize the parameters for this headers download, validate this first
  * batch, and request more headers. */
-std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlockIndex* chain_start,
-        const std::vector<CBlockHeader>& initial_headers, const arith_uint256&
-        minimum_required_work)
+void HeadersSyncState::StartInitialDownload(const CBlockIndex* chain_start,
+        const arith_uint256& minimum_required_work)
 {
     // A new instance of this object should be instantiated for every headers
     // sync, so that we don't reuse our salted hasher between syncs.
@@ -67,11 +66,6 @@ std::optional<CBlockLocator> HeadersSyncState::StartInitialDownload(const CBlock
     // chain to be longer than this (at the current time -- in the future we
     // could try again, if necessary, to sync a longer chain).
     m_max_commitments = 6*(GetAdjustedTime() - chain_start->GetMedianTimePast() + MAX_FUTURE_BLOCK_TIME) / HEADER_COMMITMENT_FREQUENCY;
-
-    if (!ValidateAndStoreHeadersCommitments(initial_headers)) {
-        return std::nullopt;
-    }
-    return MakeNextHeadersRequest(nullptr);
 }
 
 /** Process the next batch of headers received from our peer.

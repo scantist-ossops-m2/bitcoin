@@ -2465,26 +2465,20 @@ bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlo
             // once, so for now we'll just start the sync with the first header
             // in the set and not worry about this issue.
             peer.m_headers_sync.reset(new HeadersSyncState(peer.m_id, m_chainparams.GetConsensus()));
-            if (std::optional<CBlockLocator> locator =
-                    peer.m_headers_sync->StartInitialDownload(chain_start_header,
-                        headers, minimum_chain_work))
-            {
-                Assume(!locator->vHave.empty());
-                if (!locator->vHave.empty() && MaybeSendGetHeaders(pfrom, *locator, peer)) {
-                    LogPrint(BCLog::NET, "more getheaders (from %s) to end to peer=%d\n",
-                        locator->vHave.front().ToString(), pfrom.GetId());
-                }
-            }
-            if (peer.m_headers_sync->GetState() == HeadersSyncState::State::FINAL) {
-                peer.m_headers_sync.reset(nullptr);
-            }
+            peer.m_headers_sync->StartInitialDownload(chain_start_header, minimum_chain_work);
+
+            // Now a HeadersSyncState object for tracking this synchronization is created,
+            // process the headers using it as normal.
+            std::vector<CBlockHeader> headers_dummy;
+            bool ret = IsContinuationOfLowWorkHeadersSync(peer, pfrom, headers, headers_dummy);
+            // As this processing has just started, it cannot yet return headers to process.
+            Assume(headers_dummy.empty());
+            return ret;
         } else {
             LogPrint(BCLog::NET, "Ignoring low-work chain (height=%u) from peer=%d\n", chain_start_header->nHeight + headers.size(), pfrom.GetId());
+            // Since this is a low-work headers chain, no further processing is required.
+            return true;
         }
-        // Since this is a low-work headers chain, no further processing is
-        // required -- either a sync was initiated or, if it failed, there's
-        // nothing more to do.
-        return true;
     }
     return false;
 }
