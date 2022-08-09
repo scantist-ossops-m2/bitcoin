@@ -71,7 +71,6 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     std::vector<CBlockHeader> second_chain;
 
     std::unique_ptr<HeadersSyncState> hss;
-    hss.reset(new HeadersSyncState(0, Params().GetConsensus()));
 
     const int target_blocks = 15000;
     arith_uint256 chain_work = target_blocks*2;
@@ -93,7 +92,7 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     // initially and then the rest.
     headers_batch.insert(headers_batch.end(), std::next(first_chain.begin(), 1), first_chain.end());
 
-    (void)hss->StartInitialDownload(chain_start, chain_work);
+    hss.reset(new HeadersSyncState(0, Params().GetConsensus(), chain_start, chain_work));
     (void)hss->ProcessNextHeaders({first_chain.front()}, true);
     // Pretend the first header is still "full", so we don't abort.
     auto result = hss->ProcessNextHeaders(headers_batch, true);
@@ -108,10 +107,8 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     BOOST_CHECK(!result.success); // foiled!
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::FINAL);
 
-    hss.reset(new HeadersSyncState(0, Params().GetConsensus()));
-
     // Now try again, this time feeding the first chain twice.
-    (void)hss->StartInitialDownload(chain_start, chain_work);
+    hss.reset(new HeadersSyncState(0, Params().GetConsensus(), chain_start, chain_work));
     (void)hss->ProcessNextHeaders(first_chain, true);
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::REDOWNLOAD);
 
@@ -122,11 +119,9 @@ BOOST_AUTO_TEST_CASE(headers_sync_state)
     // Nothing left for the sync logic to do:
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::FINAL);
 
-    hss.reset(new HeadersSyncState(0, Params().GetConsensus()));
-
     // Finally, verify that just trying to process the second chain would not
     // succeed (too little work)
-    (void)hss->StartInitialDownload(chain_start, chain_work);
+    hss.reset(new HeadersSyncState(0, Params().GetConsensus(), chain_start, chain_work));
     BOOST_CHECK(hss->GetState() == HeadersSyncState::State::INITIAL_DOWNLOAD);
      // Pretend just the first message is "full", so we don't abort.
     (void)hss->ProcessNextHeaders({second_chain.front()}, true);

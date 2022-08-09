@@ -18,38 +18,11 @@ constexpr size_t REDOWNLOAD_BUFFER_SIZE{13959};
 // re-calculate parameters if we compress further)
 static_assert(sizeof(CompressedHeader) == 48);
 
-HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus_params) :
+HeadersSyncState::HeadersSyncState(NodeId id, const Consensus::Params& consensus_params,
+        const CBlockIndex* chain_start, const arith_uint256& minimum_required_work) :
     m_id(id), m_consensus_params(consensus_params),
     m_commit_offset(GetRand<unsigned>(HEADER_COMMITMENT_FREQUENCY))
-{ }
-
-/** Free any memory in use, and mark this object as no longer usable. This is
- * required to guarantee that we won't reuse this object with the same
- * SaltedTxidHasher for another sync. */
-void HeadersSyncState::Finalize()
 {
-    Assume(m_download_state != State::FINAL);
-    m_header_commitments.clear();
-    m_last_header_received.SetNull();
-    std::deque<CompressedHeader>().swap(m_redownloaded_headers);
-    m_redownload_buffer_last_hash.SetNull();
-    m_redownload_buffer_first_prev_hash.SetNull();
-    m_process_all_remaining_headers = false;
-    m_current_height = 0;
-
-    m_download_state = State::FINAL;
-}
-
-/** Initialize the parameters for this headers download, validate this first
- * batch, and request more headers. */
-void HeadersSyncState::StartInitialDownload(const CBlockIndex* chain_start,
-        const arith_uint256& minimum_required_work)
-{
-    // A new instance of this object should be instantiated for every headers
-    // sync, so that we don't reuse our salted hasher between syncs.
-    assert(m_download_state == State::UNSTARTED);
-    m_download_state = State::INITIAL_DOWNLOAD;
-
     m_chain_start = chain_start;
     m_minimum_required_work = minimum_required_work;
     m_current_chain_work = chain_start->nChainWork;
@@ -66,6 +39,23 @@ void HeadersSyncState::StartInitialDownload(const CBlockIndex* chain_start,
     // chain to be longer than this (at the current time -- in the future we
     // could try again, if necessary, to sync a longer chain).
     m_max_commitments = 6*(GetAdjustedTime() - chain_start->GetMedianTimePast() + MAX_FUTURE_BLOCK_TIME) / HEADER_COMMITMENT_FREQUENCY;
+}
+
+/** Free any memory in use, and mark this object as no longer usable. This is
+ * required to guarantee that we won't reuse this object with the same
+ * SaltedTxidHasher for another sync. */
+void HeadersSyncState::Finalize()
+{
+    Assume(m_download_state != State::FINAL);
+    m_header_commitments.clear();
+    m_last_header_received.SetNull();
+    std::deque<CompressedHeader>().swap(m_redownloaded_headers);
+    m_redownload_buffer_last_hash.SetNull();
+    m_redownload_buffer_first_prev_hash.SetNull();
+    m_process_all_remaining_headers = false;
+    m_current_height = 0;
+
+    m_download_state = State::FINAL;
 }
 
 /** Process the next batch of headers received from our peer.

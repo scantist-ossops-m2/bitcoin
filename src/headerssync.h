@@ -100,11 +100,9 @@ struct CompressedHeader {
 
 class HeadersSyncState {
 public:
-    HeadersSyncState(NodeId id, const Consensus::Params& consensus_params);
     ~HeadersSyncState() {}
 
     enum class State {
-        UNSTARTED,
         /** INITIAL_DOWNLOAD means the peer has not yet demonstrated their
          * chain has sufficient work */
         INITIAL_DOWNLOAD,
@@ -119,14 +117,16 @@ public:
     /** Return the current state of our download */
     State GetState() const { return m_download_state; }
 
-    /** Start headers sync (via this download-twice mechanism)
+    /** Construct a HeadersSyncState object representing a headers sync via this
+     *  download-twice mechanism).
+     *
+     * id: node id (for logging)
+     * consensus_params: parameters needed for difficulty adjustment validation
      * chain_start: best known fork point that the peer's headers branch from
-     * initial_headers: first batch of headers to process (assumes the caller
-     *                  has already verified the headers connect)
      * minimum_required_work: amount of chain work required to accept the chain
      */
-    void StartInitialDownload(const CBlockIndex* chain_start,
-            const arith_uint256& minimum_required_work);
+    HeadersSyncState(NodeId id, const Consensus::Params& consensus_params,
+            const CBlockIndex* chain_start, const arith_uint256& minimum_required_work);
 
     /** Result data structure for ProcessNextHeaders. */
     struct ProcessingResult {
@@ -257,7 +257,7 @@ private:
     bool m_process_all_remaining_headers{false};
 
     /** Current state of our headers sync. */
-    State m_download_state{State::UNSTARTED};
+    State m_download_state{State::INITIAL_DOWNLOAD};
 };
 
 #endif // BITCOIN_HEADERSSYNC_H

@@ -2464,8 +2464,8 @@ bool PeerManagerImpl::TryLowWorkHeadersSync(Peer& peer, CNode& pfrom, const CBlo
             // matter much outside of initial sync, which we generally only do
             // once, so for now we'll just start the sync with the first header
             // in the set and not worry about this issue.
-            peer.m_headers_sync.reset(new HeadersSyncState(peer.m_id, m_chainparams.GetConsensus()));
-            peer.m_headers_sync->StartInitialDownload(chain_start_header, minimum_chain_work);
+            peer.m_headers_sync.reset(new HeadersSyncState(peer.m_id, m_chainparams.GetConsensus(),
+                chain_start_header, minimum_chain_work));
 
             // Now a HeadersSyncState object for tracking this synchronization is created,
             // process the headers using it as normal.
