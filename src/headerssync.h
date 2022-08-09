@@ -211,8 +211,15 @@ private:
      * m_header_commitments.
      */
     const SaltedTxidHasher m_hasher;
+
+    /** A queue of commitment bits, created during the 1st phase, and verified during the 2nd. */
     bitdeque<> m_header_commitments;
-    uint64_t m_max_commitments{0}; // calculated at start of sync based on age of chain.
+
+    /** An upper bound on the number of commitment bits we will accept.
+     *
+     * This is calculated at the start of the sync, based on the age of the chain.
+     */
+    uint64_t m_max_commitments{0};
 
     /** Store the latest header received while in INITIAL_DOWNLOAD */
     CBlockHeader m_last_header_received;
