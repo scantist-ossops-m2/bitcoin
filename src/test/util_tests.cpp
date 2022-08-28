@@ -23,7 +23,6 @@
 #include <util/string.h>
 #include <util/time.h>
 #include <util/vector.h>
-#include <util/bitdeque.h>
 
 #include <array>
 #include <fstream>

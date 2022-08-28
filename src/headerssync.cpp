@@ -254,15 +254,14 @@ bool HeadersSyncState::ValidateAndStoreRedownloadedHeader(const CBlockHeader& he
     // our second, and we don't want to return failure after we've seen our
     // target blockhash just because we ran out of commitments.
     if (!m_process_all_remaining_headers && next_height % HEADER_COMMITMENT_PERIOD == m_commit_offset) {
-        if (m_header_commitments.size() == 0) {
+        if (m_commitments_verified == m_header_commitments.size()) {
             LogPrint(BCLog::HEADERSSYNC, "Initial headers sync aborted with peer=%d: commitment overrun at height=%i (redownload phase)\n", m_id, next_height);
             // Somehow our peer managed to feed us a different chain and
             // we've run out of commitments.
             return false;
         }
         bool commitment = m_hasher(header.GetHash()) & 1;
-        bool expected_commitment = m_header_commitments.front();
-        m_header_commitments.pop_front();
+        bool expected_commitment = m_header_commitments[m_commitments_verified++];
         if (commitment != expected_commitment) {
             LogPrint(BCLog::HEADERSSYNC, "Initial headers sync aborted with peer=%d: commitment mismatch at height=%i (redownload phase)\n", m_id, next_height);
             return false;

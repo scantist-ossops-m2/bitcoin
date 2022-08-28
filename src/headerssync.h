@@ -11,7 +11,6 @@
 #include <net.h> // For NodeId
 #include <primitives/block.h>
 #include <uint256.h>
-#include <util/bitdeque.h>
 #include <util/hasher.h>
 
 #include <deque>
@@ -220,7 +219,9 @@ private:
     const SaltedTxidHasher m_hasher;
 
     /** A queue of commitment bits, created during the 1st phase, and verified during the 2nd. */
-    bitdeque<> m_header_commitments;
+    std::vector<bool> m_header_commitments;
+
+    size_t m_commitments_verified{0};
 
     /** The (secret) offset on the heights for which to create commitments.
      *
