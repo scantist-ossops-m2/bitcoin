@@ -127,12 +127,14 @@ public:
         // The peer set both flags to false, we treat it as a protocol violation.
         if (!(they_initiate || we_initiate)) return false;
 
-        LogPrintLevel(BCLog::TXRECONCILIATION, BCLog::Level::Debug, "Register peer=%d with the following params: " /* Continued */
-                                                                    "we_initiate=%i, they_initiate=%i.\n",
-                      peer_id, we_initiate, they_initiate);
 
         const uint256 full_salt{ComputeSalt(*local_salt, remote_salt)};
         recon_state->second = TxReconciliationState(we_initiate, full_salt.GetUint64(0), full_salt.GetUint64(1));
+
+        LogPrintLevel(BCLog::TXRECONCILIATION, BCLog::Level::Debug, "Register peer=%d with the following params: " /* Continued */
+                                                                    "we_initiate=%i, salt=%016x:%016x.\n",
+                      peer_id, we_initiate, full_salt.GetUint64(0), full_salt.GetUint64(1));
+
         return true;
     }
 
