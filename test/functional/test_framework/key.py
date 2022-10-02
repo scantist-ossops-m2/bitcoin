@@ -278,6 +278,11 @@ class GE:
         return GE(x, y)
 
     @staticmethod
+    def is_valid_x(x):
+        """Determine whether the provided field element is a valid X coordinate."""
+        return (FE(x)**3 + 7).is_square()
+
+    @staticmethod
     def from_bytes(b):
         """Convert a compressed or uncompressed encoding to a point."""
         if len(b) == 33:
@@ -577,6 +582,72 @@ def sign_schnorr(key, msg, aux=None, flip_p=False, flip_r=False):
     e = int.from_bytes(TaggedHash("BIP0340/challenge", R.to_bytes_xonly() + P.to_bytes_xonly() + msg), 'big') % GE.ORDER
     return R.to_bytes_xonly() + ((k + e * sec) % GE.ORDER).to_bytes(32, 'big')
 
+MINUS_3_SQRT = FE(-3).sqrt()
+
+def xswiftec(u, t):
+    """Decode field elements (u, t) to an X coordinate on the curve."""
+    if u == 0:
+        u = FE(1)
+    if t == 0:
+        t = FE(1)
+    if u**3 + t**2 + 7 == 0:
+        t = 2 * t
+    X = (u**3 + 7 - t**2) / (2 * t)
+    Y = (X + t) / (MINUS_3_SQRT * u)
+    x3 = u + 4 * Y**2
+    if GE.is_valid_x(x3):
+        return x3
+    x2 = (-X / Y - u) / 2
+    if GE.is_valid_x(x2):
+        return x2
+    x1 = (X / Y - u) / 2
+    return x1
+
+def xelligatorswift(x):
+    """Given a field element X on the curve, find (u, t) that encode them."""
+    while True:
+        u = FE(random.randrange(1, GE.ORDER))
+        case = random.randrange(1, 5)
+        if case == 1:
+            v = x
+            if ((-v - u)**3 + 7).is_square():
+                continue
+            w2 = -(u**3 + 7) / (u**2 + u*v + v**2)
+        elif case == 2:
+            v = -x - u
+            if (v**3 + 7).is_square():
+                continue
+            w2 = -(u**3 + 7) / (u**2 + u*v + v**2)
+        else:
+            w2 = x - u
+            r = (-w2 * (4 * (u**3 + 7) + 3 * w2 * u**2)).sqrt()
+            if r is None:
+                continue
+            if case == 4:
+                r = -r
+            v = (-u + r / w2) / 2
+        w = w2.sqrt()
+        if w is None:
+            continue
+        if random.getrandbits(1):
+            w = -w
+        Y = w / 2
+        X = 2 * Y * (v + u / 2)
+        t = u * MINUS_3_SQRT * Y - X
+        return u, t
+
+def ellswift_create():
+    """Generate a (privkey, ellswift_pubkey) pair."""
+    priv = random.randrange(1, GE.ORDER)
+    u, t = xelligatorswift((priv * SECP256K1_G).x)
+    return priv, u.to_bytes() + t.to_bytes()
+
+def ellswift_ecdh_xonly(pubkey_theirs, privkey):
+    """Compute X coordinate of shared ECDH point between elswift pubkey and privkey."""
+    u = FE.from_bytes(pubkey_theirs[:32])
+    t = FE.from_bytes(pubkey_theirs[32:])
+    return (privkey * GE.lift_x(xswiftec(u, t))).x.to_bytes()
+
 class TestFrameworkKey(unittest.TestCase):
     def test_schnorr(self):
         """Test the Python Schnorr implementation."""
@@ -628,3 +699,33 @@ class TestFrameworkKey(unittest.TestCase):
                     self.assertEqual(result, result_actual, "BIP340 test vector %i (%s): verification succeeded unexpectedly" % (i, comment))
                 num_tests += 1
         self.assertTrue(num_tests >= 15) # expect at least 15 test vectors
+
+    def test_elligator_forward(self):
+        """Verify that xswiftec maps all inputs to the curve."""
+        for _ in range(32):
+            u = FE(random.randrange(0, FE.SIZE))
+            t = FE(random.randrange(0, FE.SIZE))
+            x = xswiftec(u, t)
+            self.assertTrue(GE.is_valid_x(x))
+
+    def test_elligator_roundtrip(self):
+        """Verify that encoding using xelligatorswift decodes back using xswiftec."""
+        for _ in range(32):
+            while True:
+                # Loop until we find a valid X coordinate on the curve.
+                x = FE(random.randrange(1, FE.SIZE))
+                if GE.is_valid_x(x):
+                    break
+            # Encoding it to (u, t), decode it back, and compare.
+            u, t = xelligatorswift(x)
+            x2 = xswiftec(u, t)
+            self.assertEqual(x2, x)
+
+    def test_elligator_ecdh(self):
+        """Verify that ellswift ecdh yields the same shared secret on both sides."""
+        for _ in range(8):
+            priv1, pub1 = ellswift_create()
+            priv2, pub2 = ellswift_create()
+            sharedx1 = ellswift_ecdh_xonly(pub1, priv2)
+            sharedx2 = ellswift_ecdh_xonly(pub2, priv1)
+            self.assertEqual(sharedx1, sharedx2)
