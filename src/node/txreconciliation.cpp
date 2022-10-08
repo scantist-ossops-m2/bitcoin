@@ -17,7 +17,11 @@ namespace {
 /** Static salt component used to compute short txids for sketch construction, see BIP-330. */
 const std::string RECON_STATIC_SALT = "Tx Relay Salting";
 const HashWriter RECON_SALT_HASHER = TaggedHash(RECON_STATIC_SALT);
-
+/**
+ * Maximum number of wtxids stored in a peer local set, bounded to protect the memory use of
+ * reconciliation sets and short ids mappings, and CPU used for sketch computation.
+ */
+constexpr size_t MAX_SET_SIZE = 3000;
 /**
  * Salt (specified by BIP-330) constructed from contributions from both peers. It is used
  * to compute transaction short IDs, which are then used to construct a sketch representing a set
@@ -47,6 +51,14 @@ public:
      * These values are used to salt short IDs, which is necessary for transaction reconciliations.
      */
     uint64_t m_k0, m_k1;
+
+    /**
+     * Store all wtxids which we would announce to the peer (policy checks passed, etc.)
+     * in this set instead of announcing them right away. When reconciliation time comes, we will
+     * compute a compressed representation of this set ("sketch") and use it to efficiently
+     * reconcile this set with a set on the peer's side.
+     */
+    std::set<Wtxid> m_local_set;
 
     TxReconciliationState(bool we_initiate, uint64_t k0, uint64_t k1) : m_we_initiate(we_initiate), m_k0(k0), m_k1(k1) {}
 };
@@ -119,6 +131,47 @@ public:
         return ReconciliationRegisterResult::SUCCESS;
     }
 
+    bool AddToSet(NodeId peer_id, const Wtxid& wtxid) EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
+    {
+        AssertLockNotHeld(m_txreconciliation_mutex);
+        LOCK(m_txreconciliation_mutex);
+        if (!IsPeerRegistered(peer_id)) return false;
+        auto& recon_state = std::get<TxReconciliationState>(m_states.find(peer_id)->second);
+
+        // Check if the reconciliation set is not at capacity for two reasons:
+        // - limit sizes of reconciliation sets and short id mappings;
+        // - limit CPU use for sketch computations.
+        //
+        // Since we reconcile frequently, reaching capacity either means:
+        // (1) a peer for some reason does not request reconciliations from us for a long while, or
+        // (2) really a lot of valid fee-paying transactions were dumped on us at once.
+        // We don't care about a laggy peer (1) because we probably can't help them even if we fanout transactions.
+        // However, exploiting (2) should not prevent us from relaying certain transactions.
+        //
+        // Transactions which don't make it to the set due to the limit are announced via fan-out.
+        if (recon_state.m_local_set.size() >= MAX_SET_SIZE) return false;
+
+        // The caller currently keeps track of the per-peer transaction announcements, so it
+        // should not attempt to add same tx to the set twice. However, if that happens, we will
+        // simply ignore it.
+        if (recon_state.m_local_set.insert(wtxid).second) {
+            LogPrintLevel(BCLog::TXRECONCILIATION, BCLog::Level::Debug, "Added %s to the reconciliation set for peer=%d. " /* Continued */
+                                                                        "Now the set contains %i transactions.\n",
+                          wtxid.ToString(), peer_id, recon_state.m_local_set.size());
+        }
+        return true;
+    }
+
+    bool TryRemovingFromSet(NodeId peer_id, const Wtxid& wtxid_to_remove) EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
+    {
+        AssertLockNotHeld(m_txreconciliation_mutex);
+        LOCK(m_txreconciliation_mutex);
+        if (!IsPeerRegistered(peer_id)) return false;
+        auto& recon_state = std::get<TxReconciliationState>(m_states.find(peer_id)->second);
+
+        return recon_state.m_local_set.erase(wtxid_to_remove) > 0;
+    }
+
     void ForgetPeer(NodeId peer_id) EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
     {
         AssertLockNotHeld(m_txreconciliation_mutex);
@@ -157,6 +210,16 @@ ReconciliationRegisterResult TxReconciliationTracker::RegisterPeer(NodeId peer_i
                                                           uint32_t peer_recon_version, uint64_t remote_salt)
 {
     return m_impl->RegisterPeer(peer_id, is_peer_inbound, peer_recon_version, remote_salt);
+}
+
+bool TxReconciliationTracker::AddToSet(NodeId peer_id, const Wtxid& wtxid)
+{
+    return m_impl->AddToSet(peer_id, wtxid);
+}
+
+bool TxReconciliationTracker::TryRemovingFromSet(NodeId peer_id, const Wtxid& wtxid_to_remove)
+{
+    return m_impl->TryRemovingFromSet(peer_id, wtxid_to_remove);
 }
 
 void TxReconciliationTracker::ForgetPeer(NodeId peer_id)
