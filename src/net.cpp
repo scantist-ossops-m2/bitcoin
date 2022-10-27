@@ -646,6 +646,7 @@ void CNode::CopyStats(CNodeStats& stats)
     stats.addrLocal = addrLocalUnlocked.IsValid() ? addrLocalUnlocked.ToString() : "";
 
     X(m_conn_type);
+    X(m_msg_starts);
 }
 #undef X
 
@@ -814,6 +815,7 @@ size_t CConnman::SocketSendData(CNode& node) const
 {
     auto it = node.vSendMsg.begin();
     size_t nSentSize = 0;
+    uint64_t starts_sent = 0;
 
     while (it != node.vSendMsg.end()) {
         const auto& data = *it;
@@ -827,6 +829,9 @@ size_t CConnman::SocketSendData(CNode& node) const
             nBytes = node.m_sock->Send(reinterpret_cast<const char*>(data.data()) + node.nSendOffset, data.size() - node.nSendOffset, MSG_NOSIGNAL | MSG_DONTWAIT);
         }
         if (nBytes > 0) {
+            if (node.nSendOffset == 0 && (node.m_sent_buffers & 1) == 0) {
+                starts_sent += 1;
+            }
             node.m_last_send = GetTime<std::chrono::seconds>();
             node.nSendBytes += nBytes;
             node.nSendOffset += nBytes;
@@ -835,6 +840,7 @@ size_t CConnman::SocketSendData(CNode& node) const
                 node.nSendOffset = 0;
                 node.nSendSize -= data.size();
                 node.fPauseSend = node.nSendSize > nSendBufferMaxSize;
+                node.m_sent_buffers += 1;
                 it++;
             } else {
                 // could not send full message; stop sending more
@@ -859,6 +865,11 @@ size_t CConnman::SocketSendData(CNode& node) const
         assert(node.nSendSize == 0);
     }
     node.vSendMsg.erase(node.vSendMsg.begin(), it);
+    node.m_msg_starts[starts_sent] += 1;
+    {
+        LOCK(m_msg_batches_mutex);
+        m_msg_batches[starts_sent] += 1;
+    }
     return nSentSize;
 }
 

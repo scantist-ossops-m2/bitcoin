@@ -218,6 +218,7 @@ public:
     Network m_network;
     uint32_t m_mapped_as;
     ConnectionType m_conn_type;
+    std::map<int, uint64_t> m_msg_starts;
 };
 
 
@@ -369,6 +370,8 @@ public:
     /** Offset inside the first vSendMsg already sent */
     size_t nSendOffset GUARDED_BY(cs_vSend){0};
     uint64_t nSendBytes GUARDED_BY(cs_vSend){0};
+    uint64_t m_sent_buffers GUARDED_BY(cs_vSend){0};
+    std::map<int, uint64_t> m_msg_starts GUARDED_BY(cs_vSend);
     std::deque<std::vector<unsigned char>> vSendMsg GUARDED_BY(cs_vSend);
     Mutex cs_vSend;
     Mutex m_sock_mutex;
@@ -982,6 +985,11 @@ private:
     std::atomic<uint64_t> nTotalBytesRecv{0};
     uint64_t nTotalBytesSent GUARDED_BY(m_total_bytes_sent_mutex) {0};
 
+public:
+    mutable Mutex m_msg_batches_mutex;
+    mutable std::map<int, uint64_t> m_msg_batches GUARDED_BY(m_msg_batches_mutex);
+
+private:
     // outbound limit & stats
     uint64_t nMaxOutboundTotalBytesSentInCycle GUARDED_BY(m_total_bytes_sent_mutex) {0};
     std::chrono::seconds nMaxOutboundCycleStartTime GUARDED_BY(m_total_bytes_sent_mutex) {0};

@@ -264,6 +264,14 @@ static RPCHelpMan getpeerinfo()
         obj.pushKV("bytesrecv_per_msg", recvPerMsgType);
         obj.pushKV("connection_type", ConnectionTypeAsString(stats.m_conn_type));
 
+        UniValue msg_batch_sizes(UniValue::VOBJ);
+        for (const auto& [batchsize, count] : stats.m_msg_starts) {
+            if (count > 0) {
+                msg_batch_sizes.pushKV(strprintf("%i", batchsize), count);
+            }
+        }
+        obj.pushKV("msg_batch_sizes", std::move(msg_batch_sizes));
+
         ret.push_back(obj);
     }
 
@@ -628,8 +636,26 @@ static RPCHelpMan getnetworkinfo()
                 },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
-    LOCK(cs_main);
     UniValue obj(UniValue::VOBJ);
+    NodeContext& curnode = EnsureAnyNodeContext(request.context);
+    const CConnman& connman = EnsureConnman(curnode);
+    {
+        UniValue msg_batch_sizes(UniValue::VOBJ);
+        LOCK(connman.m_msg_batches_mutex);
+        int64_t total{0};
+        int64_t batchable{0};
+        for (const auto& [batchsize, count] : connman.m_msg_batches) {
+            if (count > 0) {
+                total += int64_t{batchsize} * count;
+                batchable += std::max<int64_t>(0, batchsize - 1) * count;
+                msg_batch_sizes.pushKV(strprintf("%i", batchsize), count);
+            }
+        }
+        msg_batch_sizes.pushKV("total", total);
+        msg_batch_sizes.pushKV("batchable", batchable);
+        obj.pushKV("msg_batch_sizes", std::move(msg_batch_sizes));
+    }
+    LOCK(cs_main);
     obj.pushKV("version",       CLIENT_VERSION);
     obj.pushKV("subversion",    strSubVersion);
     obj.pushKV("protocolversion",PROTOCOL_VERSION);
@@ -669,6 +695,8 @@ static RPCHelpMan getnetworkinfo()
     }
     obj.pushKV("localaddresses", localAddresses);
     obj.pushKV("warnings",       GetWarnings(false).original);
+
+
     return obj;
 },
     };
