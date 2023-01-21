@@ -10,6 +10,16 @@
 #include <assert.h>
 
 namespace miniscript {
+
+bool IsTapscript(MiniscriptContext ms_ctx)
+{
+    switch (ms_ctx) {
+        case MiniscriptContext::P2WSH: return false;
+        case MiniscriptContext::TAPSCRIPT: return true;
+    }
+    assert(false);
+}
+
 namespace internal {
 
 Type SanitizeType(Type e) {
