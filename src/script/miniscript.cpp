@@ -6,6 +6,7 @@
 #include <vector>
 #include <script/script.h>
 #include <script/miniscript.h>
+#include <serialize.h>
 
 #include <assert.h>
 
@@ -21,6 +22,30 @@ bool IsTapscript(MiniscriptContext ms_ctx)
 }
 
 namespace internal {
+
+//! nVersion + nLockTime
+constexpr uint32_t TX_OVERHEAD{4 + 4};
+//! prevout + nSequence + scriptSig
+constexpr uint32_t TXIN_BYTES_NO_WITNESS{36 + 4 + 1};
+//! nValue + script len + OP_0 + pushdata 32.
+constexpr uint32_t P2WSH_TXOUT_BYTES{8 + 1 + 1 + 33};
+//! Data other than the witness in a transaction. Overhead + vin count + one vin + vout count + one vout + segwit marker
+constexpr uint32_t TX_BODY_LEEWAY_WEIGHT{(TX_OVERHEAD + GetSizeOfCompactSize(TXIN_BYTES_NO_WITNESS) + TXIN_BYTES_NO_WITNESS + GetSizeOfCompactSize(P2WSH_TXOUT_BYTES) + P2WSH_TXOUT_BYTES) * WITNESS_SCALE_FACTOR + 2};
+//! Maximum possible stack size to spend a Taproot output (excluding the script itself).
+constexpr uint32_t MAX_TAPSCRIPT_SAT_SIZE{GetSizeOfCompactSize(MAX_STACK_SIZE) + (GetSizeOfCompactSize(MAX_TAPMINISCRIPT_STACK_ELEM_SIZE) + MAX_TAPMINISCRIPT_STACK_ELEM_SIZE) * MAX_STACK_SIZE + GetSizeOfCompactSize(TAPROOT_CONTROL_MAX_SIZE) + TAPROOT_CONTROL_MAX_SIZE};
+
+uint32_t MaxScriptSize(MiniscriptContext ms_ctx)
+{
+    if (IsTapscript(ms_ctx)) {
+        // Leaf scripts under Tapscript are not explicitly limited in size. They are only implicitly bounded
+        // by the maximum standard size of a spending transaction. Let the maximum script size conservatively
+        // be small enough such as even a maximum sized witness and a reasonably sized spending transaction can
+        // spend an output paying to this script without running into the maximum standard tx size limit.
+        const auto max_size{MAX_STANDARD_TX_WEIGHT - TX_BODY_LEEWAY_WEIGHT - MAX_TAPSCRIPT_SAT_SIZE};
+        return max_size - GetSizeOfCompactSize(max_size);
+    }
+    return MAX_STANDARD_P2WSH_SCRIPT_SIZE;
+}
 
 Type SanitizeType(Type e) {
     int num_types = (e << "K"_mst) + (e << "V"_mst) + (e << "B"_mst) + (e << "W"_mst);

@@ -241,6 +241,12 @@ bool IsTapscript(MiniscriptContext ms_ctx);
 
 namespace internal {
 
+//! The maximum size of a witness item for a Miniscript under Tapscript context. (A BIP340 signature with a sighash type byte.)
+static constexpr uint32_t MAX_TAPMINISCRIPT_STACK_ELEM_SIZE{65};
+
+//! The maximum size of a script depending on the context.
+uint32_t MaxScriptSize(MiniscriptContext ms_ctx);
+
 //! Helper function for Node::CalcType.
 Type ComputeType(Fragment fragment, Type x, Type y, Type z, const std::vector<Type>& sub_types, uint32_t k, size_t data_size, size_t n_subs, size_t n_keys, MiniscriptContext ms_ctx);
 
@@ -1270,6 +1276,7 @@ public:
 
     //! Check the ops limit of this script against the consensus limit.
     bool CheckOpsLimit() const {
+        if (IsTapscript(m_script_ctx)) return true;
         if (const auto ops = GetOps()) return *ops <= MAX_OPS_PER_SCRIPT;
         return true;
     }
@@ -1283,6 +1290,8 @@ public:
 
     //! Check the maximum stack size for this script against the policy limit.
     bool CheckStackSize() const {
+        // TODO: MAX_STACK_SIZE during script execution under Tapscript.
+        if (IsTapscript(m_script_ctx)) return true;
         if (const auto ss = GetStackSize()) return *ss <= MAX_STANDARD_P2WSH_STACK_ITEMS;
         return true;
     }
@@ -1352,7 +1361,10 @@ public:
     }
 
     //! Check whether this node is valid at all.
-    bool IsValid() const { return !(GetType() == ""_mst) && ScriptSize() <= MAX_STANDARD_P2WSH_SCRIPT_SIZE; }
+    bool IsValid() const {
+        if (GetType() == ""_mst) return false;
+        return ScriptSize() <= internal::MaxScriptSize(m_script_ctx);
+    }
 
     //! Check whether this node is valid as a script on its own.
     bool IsValidTopLevel() const { return IsValid() && GetType() << "B"_mst; }
@@ -1539,6 +1551,7 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
     //   (instead transforming another opcode into its VERIFY form). However, the v: wrapper has
     //   to be interleaved with other fragments to be valid, so this is not a concern.
     size_t script_size{1};
+    size_t max_size{internal::MaxScriptSize(ctx.MsContext())};
 
     // The two integers are used to hold state for thresh()
     std::vector<std::tuple<ParseContext, int64_t, int64_t>> to_parse;
@@ -1582,7 +1595,7 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
     };
 
     while (!to_parse.empty()) {
-        if (script_size > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
+        if (script_size > max_size) return {};
 
         // Get the current context we are decoding within
         auto [cur_context, n, k] = to_parse.back();
@@ -1601,7 +1614,7 @@ inline NodeRef<Key> Parse(Span<const char> in, const Ctx& ctx)
             // If there is no colon, this loop won't execute
             bool last_was_v{false};
             for (size_t j = 0; colon_index && j < *colon_index; ++j) {
-                if (script_size > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
+                if (script_size > max_size) return {};
                 if (in[j] == 'a') {
                     script_size += 2;
                     to_parse.emplace_back(ParseContext::ALT, -1, -1);
@@ -2379,7 +2392,7 @@ template<typename Ctx>
 inline NodeRef<typename Ctx::Key> FromScript(const CScript& script, const Ctx& ctx) {
     using namespace internal;
     // A too large Script is necessarily invalid, don't bother parsing it.
-    if (script.size() > MAX_STANDARD_P2WSH_SCRIPT_SIZE) return {};
+    if (script.size() > internal::MaxScriptSize(ctx.MsContext())) return {};
     auto decomposed = DecomposeScript(script);
     if (!decomposed) return {};
     auto it = decomposed->begin();
