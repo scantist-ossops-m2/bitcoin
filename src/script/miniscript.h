@@ -291,7 +291,9 @@ static const auto INVALID = InputStack().SetAvailable(Availability::NO);
 //! A pair of a satisfaction and a dissatisfaction InputStack.
 struct InputResult {
     InputStack nsat, sat;
-    InputResult(InputStack in_nsat, InputStack in_sat) : nsat(std::move(in_nsat)), sat(std::move(in_sat)) {}
+
+    template<typename A, typename B>
+    InputResult(A&& in_nsat, B&& in_sat) : nsat(std::forward<A>(in_nsat)), sat(std::forward<B>(in_sat)) {}
 };
 
 //! Class whose objects represent the maximum of a list of integers.
@@ -855,12 +857,12 @@ private:
                 case Fragment::PK_K: {
                     std::vector<unsigned char> sig;
                     Availability avail = ctx.Sign(node.keys[0], sig);
-                    return InputResult(ZERO, InputStack(std::move(sig)).SetWithSig().SetAvailable(avail));
+                    return {ZERO, InputStack(std::move(sig)).SetWithSig().SetAvailable(avail)};
                 }
                 case Fragment::PK_H: {
                     std::vector<unsigned char> key = ctx.ToPKBytes(node.keys[0]), sig;
                     Availability avail = ctx.Sign(node.keys[0], sig);
-                    return InputResult(ZERO + InputStack(key), (InputStack(std::move(sig)).SetWithSig() + InputStack(key)).SetAvailable(avail));
+                    return {ZERO + InputStack(key), (InputStack(std::move(sig)).SetWithSig() + InputStack(key)).SetAvailable(avail)};
                 }
                 case Fragment::MULTI: {
                     std::vector<InputStack> sats = Vector(ZERO);
@@ -877,7 +879,7 @@ private:
                     InputStack nsat = ZERO;
                     for (size_t i = 0; i < node.k; ++i) nsat = std::move(nsat) + ZERO;
                     assert(node.k <= sats.size());
-                    return InputResult(std::move(nsat), std::move(sats[node.k]));
+                    return {std::move(nsat), std::move(sats[node.k])};
                 }
                 case Fragment::THRESH: {
                     std::vector<InputStack> sats = Vector(EMPTY);
@@ -896,62 +898,62 @@ private:
                         if (i != node.k) nsat = std::move(nsat) | std::move(sats[i]);
                     }
                     assert(node.k <= sats.size());
-                    return InputResult(std::move(nsat), std::move(sats[node.k]));
+                    return {std::move(nsat), std::move(sats[node.k])};
                 }
                 case Fragment::OLDER: {
-                    return InputResult(INVALID, ctx.CheckOlder(node.k) ? EMPTY : INVALID);
+                    return {INVALID, ctx.CheckOlder(node.k) ? EMPTY : INVALID};
                 }
                 case Fragment::AFTER: {
-                    return InputResult(INVALID, ctx.CheckAfter(node.k) ? EMPTY : INVALID);
+                    return {INVALID, ctx.CheckAfter(node.k) ? EMPTY : INVALID};
                 }
                 case Fragment::SHA256: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatSHA256(node.data, preimage);
-                    return InputResult(ZERO32, InputStack(std::move(preimage)).SetAvailable(avail));
+                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
                 }
                 case Fragment::RIPEMD160: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatRIPEMD160(node.data, preimage);
-                    return InputResult(ZERO32, InputStack(std::move(preimage)).SetAvailable(avail));
+                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
                 }
                 case Fragment::HASH256: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatHASH256(node.data, preimage);
-                    return InputResult(ZERO32, InputStack(std::move(preimage)).SetAvailable(avail));
+                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
                 }
                 case Fragment::HASH160: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatHASH160(node.data, preimage);
-                    return InputResult(ZERO32, InputStack(std::move(preimage)).SetAvailable(avail));
+                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
                 }
                 case Fragment::AND_V: {
                     auto& x = subres[0], &y = subres[1];
-                    return InputResult((y.nsat + x.sat).SetNonCanon(), y.sat + x.sat);
+                    return {(y.nsat + x.sat).SetNonCanon(), y.sat + x.sat};
                 }
                 case Fragment::AND_B: {
                     auto& x = subres[0], &y = subres[1];
-                    return InputResult((y.nsat + x.nsat) | (y.sat + x.nsat).SetMalleable().SetNonCanon() | (y.nsat + x.sat).SetMalleable().SetNonCanon(), y.sat + x.sat);
+                    return {(y.nsat + x.nsat) | (y.sat + x.nsat).SetMalleable().SetNonCanon() | (y.nsat + x.sat).SetMalleable().SetNonCanon(), y.sat + x.sat};
                 }
                 case Fragment::OR_B: {
                     auto& x = subres[0], &z = subres[1];
                     // The (sat(Z) sat(X)) solution is overcomplete (attacker can change either into dsat).
-                    return InputResult(z.nsat + x.nsat, (z.nsat + x.sat) | (z.sat + x.nsat) | (z.sat + x.sat).SetMalleable().SetNonCanon());
+                    return {z.nsat + x.nsat, (z.nsat + x.sat) | (z.sat + x.nsat) | (z.sat + x.sat).SetMalleable().SetNonCanon()};
                 }
                 case Fragment::OR_C: {
                     auto& x = subres[0], &z = subres[1];
-                    return InputResult(INVALID, std::move(x.sat) | (z.sat + x.nsat));
+                    return {INVALID, std::move(x.sat) | (z.sat + x.nsat)};
                 }
                 case Fragment::OR_D: {
                     auto& x = subres[0], &z = subres[1];
-                    return InputResult(z.nsat + x.nsat, std::move(x.sat) | (z.sat + x.nsat));
+                    return {z.nsat + x.nsat, std::move(x.sat) | (z.sat + x.nsat)};
                 }
                 case Fragment::OR_I: {
                     auto& x = subres[0], &z = subres[1];
-                    return InputResult((x.nsat + ONE) | (z.nsat + ZERO), (x.sat + ONE) | (z.sat + ZERO));
+                    return {(x.nsat + ONE) | (z.nsat + ZERO), (x.sat + ONE) | (z.sat + ZERO)};
                 }
                 case Fragment::ANDOR: {
                     auto& x = subres[0], &y = subres[1], &z = subres[2];
-                    return InputResult((y.nsat + x.sat).SetNonCanon() | (z.nsat + x.nsat), (y.sat + x.sat) | (z.sat + x.nsat));
+                    return {(y.nsat + x.sat).SetNonCanon() | (z.nsat + x.nsat), (y.sat + x.sat) | (z.sat + x.nsat)};
                 }
                 case Fragment::WRAP_A:
                 case Fragment::WRAP_S:
@@ -960,7 +962,7 @@ private:
                     return std::move(subres[0]);
                 case Fragment::WRAP_D: {
                     auto &x = subres[0];
-                    return InputResult(ZERO, x.sat + ONE);
+                    return {ZERO, x.sat + ONE};
                 }
                 case Fragment::WRAP_J: {
                     auto &x = subres[0];
@@ -969,17 +971,17 @@ private:
                     // if a dissatisfaction with a top zero element is found, we don't know whether another one with a
                     // nonzero top stack element exists. Make the conservative assumption that whenever the subexpression is weakly
                     // dissatisfiable, this alternative dissatisfaction exists and leads to malleability.
-                    return InputResult(InputStack(ZERO).SetMalleable(x.nsat.available != Availability::NO && !x.nsat.has_sig), std::move(x.sat));
+                    return {InputStack(ZERO).SetMalleable(x.nsat.available != Availability::NO && !x.nsat.has_sig), std::move(x.sat)};
                 }
                 case Fragment::WRAP_V: {
                     auto &x = subres[0];
-                    return InputResult(INVALID, std::move(x.sat));
+                    return {INVALID, std::move(x.sat)};
                 }
-                case Fragment::JUST_0: return InputResult(EMPTY, INVALID);
-                case Fragment::JUST_1: return InputResult(INVALID, EMPTY);
+                case Fragment::JUST_0: return {EMPTY, INVALID};
+                case Fragment::JUST_1: return {INVALID, EMPTY};
             }
             assert(false);
-            return InputResult(INVALID, INVALID);
+            return {INVALID, INVALID};
         };
 
         auto tester = [&helper](const Node& node, Span<InputResult> subres) -> InputResult {
