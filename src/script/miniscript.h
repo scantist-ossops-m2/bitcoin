@@ -932,6 +932,11 @@ private:
                 }
                 case Fragment::AND_B: {
                     auto& x = subres[0], &y = subres[1];
+                    // Note that it is not strictly necessary to mark the 2nd and 3rd dissatisfaction here
+                    // as malleable. While they are definitely malleable, they are also non-canonical due
+                    // to the guaranteed existence of a no-signature other dissatisfaction (the 1st)
+                    // option. Because of that, the 2nd and 3rd option will never be chosen, even if they
+                    // weren't marked as malleable.
                     return {(y.nsat + x.nsat) | (y.sat + x.nsat).SetMalleable().SetNonCanon() | (y.nsat + x.sat).SetMalleable().SetNonCanon(), y.sat + x.sat};
                 }
                 case Fragment::OR_B: {
