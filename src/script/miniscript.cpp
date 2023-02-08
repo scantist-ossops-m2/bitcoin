@@ -172,8 +172,8 @@ Type ComputeType(Fragment fragment, Type x, Type y, Type z, const std::vector<Ty
             (y & "B"_mst).If(x << "Bdu"_mst) | // B=B_y*B_x*d_x*u_x
             (x & "o"_mst).If(y << "z"_mst) | // o=o_x*z_y
             (x & y & "m"_mst).If(x << "e"_mst && (x | y) << "s"_mst) | // m=m_x*m_y*e_x*(s_x+s_y)
-            (x & y & "zes"_mst) | // z=z_x*z_y, e=e_x*e_y, s=s_x*s_y
-            (y & "ufd"_mst) | // u=u_y, f=f_y, d=d_y
+            (x & y & "zs"_mst) | // z=z_x*z_y, s=s_x*s_y
+            (y & "ufde"_mst) | // u=u_y, f=f_y, d=d_y, e=e_y
             "x"_mst | // x
             ((x | y) & "ghij"_mst) | // g=g_x+g_y, h=h_x+h_y, i=i_x+i_y, j=j_x+j_y
             (x & y & "k"_mst); // k=k_x*k_y
