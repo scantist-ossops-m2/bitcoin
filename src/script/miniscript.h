@@ -893,8 +893,13 @@ private:
                     }
                     InputStack nsat = INVALID;
                     for (size_t i = 0; i < sats.size(); ++i) {
-                        // i==k is the satisfaction; i==0 is the canonical dissatisfaction; the rest are non-canonical.
-                        if (i != 0 && i != node.k) sats[i].SetNonCanon();
+                        // i==k is the satisfaction; i==0 is the canonical dissatisfaction;
+                        // the rest are non-canonical (a no-signature dissatisfaction - the i=0
+                        // form - is always available) and malleable (due to overcompleteness).
+                        // Marking the solutions malleable here is not strictly necessary, as they
+                        // should already never be picked in non-malleable solutions due to the
+                        // availability of the i=0 form.
+                        if (i != 0 && i != node.k) sats[i].SetMalleable().SetNonCanon();
                         if (i != node.k) nsat = std::move(nsat) | std::move(sats[i]);
                     }
                     assert(node.k <= sats.size());
