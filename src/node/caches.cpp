@@ -1,13 +1,14 @@
-// Copyright (c) 2021 The Bitcoin Core developers
+// Copyright (c) 2021-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <node/caches.h>
 
+#include <index/txindex.h>
 #include <txdb.h>
 #include <util/system.h>
-#include <validation.h>
 
+namespace node {
 CacheSizes CalculateCacheSizes(const ArgsManager& args, size_t n_indexes)
 {
     int64_t nTotalCache = (args.GetIntArg("-dbcache", nDefaultDbCache) << 20);
@@ -30,3 +31,4 @@ CacheSizes CalculateCacheSizes(const ArgsManager& args, size_t n_indexes)
     sizes.coins = nTotalCache; // the rest goes to in-memory cache
     return sizes;
 }
+} // namespace node

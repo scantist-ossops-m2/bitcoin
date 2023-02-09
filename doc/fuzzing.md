@@ -71,6 +71,15 @@ block^@M-^?M-^?M-^?M-^?M-^?nM-^?M-^?
 
 In this case the fuzzer managed to create a `block` message which when passed to `ProcessMessage(...)` increased coverage.
 
+It is possible to specify `bitcoind` arguments to the `fuzz` executable.
+Depending on the test, they may be ignored or consumed and alter the behavior
+of the test. Just make sure to use double-dash to distinguish them from the
+fuzzer's own arguments:
+
+```sh
+$ FUZZ=address_deserialize_v2 src/test/fuzz/fuzz -runs=1 fuzz_seed_corpus/address_deserialize_v2 --checkaddrman=5 --printtoconsole=1
+```
+
 ## Fuzzing corpora
 
 The project's collection of seed corpora is found in the [`bitcoin-core/qa-assets`](https://github.com/bitcoin-core/qa-assets) repo.
@@ -127,10 +136,10 @@ You may also need to take care of giving the correct path for `clang` and
 `clang++`, like `CC=/path/to/clang CXX=/path/to/clang++` if the non-systems
 `clang` does not come first in your path.
 
-Full configure that was tested on macOS Catalina with `brew` installed `llvm`:
+Full configure that was tested on macOS with `brew` installed `llvm`:
 
 ```sh
-./configure --enable-fuzz --with-sanitizers=fuzzer,address,undefined CC=/usr/local/opt/llvm/bin/clang CXX=/usr/local/opt/llvm/bin/clang++ --disable-asm
+./configure --enable-fuzz --with-sanitizers=fuzzer,address,undefined --disable-asm CC=$(brew --prefix llvm)/bin/clang CXX=$(brew --prefix llvm)/bin/clang++
 ```
 
 Read the [libFuzzer documentation](https://llvm.org/docs/LibFuzzer.html) for more information. This [libFuzzer tutorial](https://github.com/google/fuzzing/blob/master/tutorial/libFuzzerTutorial.md) might also be of interest.
@@ -274,8 +283,8 @@ $ sudo apt-get install libtool libtool-bin wget automake autoconf bison gdb
 ```
 
 At this point, you must install the .NET core.  The process differs, depending on your Linux distribution.
-See [this link](https://docs.microsoft.com/en-us/dotnet/core/install/linux) for details.
-On ubuntu 20.04, the following should work:
+See [this link](https://learn.microsoft.com/en-us/dotnet/core/install/linux) for details.
+On Ubuntu 20.04, the following should work:
 
 ```sh
 $ wget -q https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb

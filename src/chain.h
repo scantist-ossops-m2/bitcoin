@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2021 The Bitcoin Core developers
+// Copyright (c) 2009-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -9,9 +9,11 @@
 #include <arith_uint256.h>
 #include <consensus/params.h>
 #include <flatfile.h>
+#include <kernel/cs_main.h>
 #include <primitives/block.h>
-#include <tinyformat.h>
+#include <sync.h>
 #include <uint256.h>
+#include <util/time.h>
 
 #include <vector>
 
@@ -135,7 +137,7 @@ enum BlockStatus : uint32_t {
      * If set, this indicates that the block index entry is assumed-valid.
      * Certain diagnostics will be skipped in e.g. CheckBlockIndex().
      * It almost certainly means that the block's full validation is pending
-     * on a background chainstate. See `doc/assumeutxo.md`.
+     * on a background chainstate. See `doc/design/assumeutxo.md`.
      */
     BLOCK_ASSUMED_VALID      =   256,
 };
@@ -161,13 +163,13 @@ public:
     int nHeight{0};
 
     //! Which # file this block is stored in (blk?????.dat)
-    int nFile{0};
+    int nFile GUARDED_BY(::cs_main){0};
 
     //! Byte offset within blk?????.dat where this block's data is stored
-    unsigned int nDataPos{0};
+    unsigned int nDataPos GUARDED_BY(::cs_main){0};
 
     //! Byte offset within rev?????.dat where this block's undo data is stored
-    unsigned int nUndoPos{0};
+    unsigned int nUndoPos GUARDED_BY(::cs_main){0};
 
     //! (memory only) Total amount of work (expected number of hashes) in the chain up to and including this block
     arith_uint256 nChainWork{};
@@ -195,7 +197,7 @@ public:
     //! load to avoid the block index being spuriously rewound.
     //! @sa NeedsRedownload
     //! @sa ActivateSnapshot
-    uint32_t nStatus{0};
+    uint32_t nStatus GUARDED_BY(::cs_main){0};
 
     //! block header
     int32_t nVersion{0};
@@ -210,10 +212,6 @@ public:
     //! (memory only) Maximum nTime in the chain up to and including this block.
     unsigned int nTimeMax{0};
 
-    CBlockIndex()
-    {
-    }
-
     explicit CBlockIndex(const CBlockHeader& block)
         : nVersion{block.nVersion},
           hashMerkleRoot{block.hashMerkleRoot},
@@ -223,8 +221,9 @@ public:
     {
     }
 
-    FlatFilePos GetBlockPos() const
+    FlatFilePos GetBlockPos() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
+        AssertLockHeld(::cs_main);
         FlatFilePos ret;
         if (nStatus & BLOCK_HAVE_DATA) {
             ret.nFile = nFile;
@@ -233,8 +232,9 @@ public:
         return ret;
     }
 
-    FlatFilePos GetUndoPos() const
+    FlatFilePos GetUndoPos() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
+        AssertLockHeld(::cs_main);
         FlatFilePos ret;
         if (nStatus & BLOCK_HAVE_UNDO) {
             ret.nFile = nFile;
@@ -258,6 +258,7 @@ public:
 
     uint256 GetBlockHash() const
     {
+        assert(phashBlock != nullptr);
         return *phashBlock;
     }
 
@@ -269,6 +270,11 @@ public:
      * Does not imply the transactions are still stored on disk. (IsBlockPruned might return true)
      */
     bool HaveTxsDownloaded() const { return nChainTx != 0; }
+
+    NodeSeconds Time() const
+    {
+        return NodeSeconds{std::chrono::seconds{nTime}};
+    }
 
     int64_t GetBlockTime() const
     {
@@ -296,17 +302,13 @@ public:
         return pbegin[(pend - pbegin) / 2];
     }
 
-    std::string ToString() const
-    {
-        return strprintf("CBlockIndex(pprev=%p, nHeight=%d, merkle=%s, hashBlock=%s)",
-            pprev, nHeight,
-            hashMerkleRoot.ToString(),
-            GetBlockHash().ToString());
-    }
+    std::string ToString() const;
 
     //! Check whether this block index entry is valid up to the passed validity level.
     bool IsValid(enum BlockStatus nUpTo = BLOCK_VALID_TRANSACTIONS) const
+        EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
+        AssertLockHeld(::cs_main);
         assert(!(nUpTo & ~BLOCK_VALID_MASK)); // Only validity flags allowed.
         if (nStatus & BLOCK_FAILED_MASK)
             return false;
@@ -315,12 +317,17 @@ public:
 
     //! @returns true if the block is assumed-valid; this means it is queued to be
     //!   validated by a background chainstate.
-    bool IsAssumedValid() const { return nStatus & BLOCK_ASSUMED_VALID; }
+    bool IsAssumedValid() const EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
+    {
+        AssertLockHeld(::cs_main);
+        return nStatus & BLOCK_ASSUMED_VALID;
+    }
 
     //! Raise the validity level of this block index entry.
     //! Returns true if the validity was changed.
-    bool RaiseValidity(enum BlockStatus nUpTo)
+    bool RaiseValidity(enum BlockStatus nUpTo) EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
+        AssertLockHeld(::cs_main);
         assert(!(nUpTo & ~BLOCK_VALID_MASK)); // Only validity flags allowed.
         if (nStatus & BLOCK_FAILED_MASK) return false;
 
@@ -343,6 +350,24 @@ public:
     //! Efficiently find an ancestor of this block.
     CBlockIndex* GetAncestor(int height);
     const CBlockIndex* GetAncestor(int height) const;
+
+    CBlockIndex() = default;
+    ~CBlockIndex() = default;
+
+protected:
+    //! CBlockIndex should not allow public copy construction because equality
+    //! comparison via pointer is very common throughout the codebase, making
+    //! use of copy a footgun. Also, use of copies do not have the benefit
+    //! of simplifying lifetime considerations due to attributes like pprev and
+    //! pskip, which are at risk of becoming dangling pointers in a copied
+    //! instance.
+    //!
+    //! We declare these protected instead of simply deleting them so that
+    //! CDiskBlockIndex can reuse copy construction.
+    CBlockIndex(const CBlockIndex&) = default;
+    CBlockIndex& operator=(const CBlockIndex&) = delete;
+    CBlockIndex(CBlockIndex&&) = delete;
+    CBlockIndex& operator=(CBlockIndex&&) = delete;
 };
 
 arith_uint256 GetBlockProof(const CBlockIndex& block);
@@ -370,6 +395,7 @@ public:
 
     SERIALIZE_METHODS(CDiskBlockIndex, obj)
     {
+        LOCK(::cs_main);
         int _nVersion = s.GetVersion();
         if (!(s.GetType() & SER_GETHASH)) READWRITE(VARINT_MODE(_nVersion, VarIntMode::NONNEGATIVE_SIGNED));
 
@@ -389,7 +415,7 @@ public:
         READWRITE(obj.nNonce);
     }
 
-    uint256 GetBlockHash() const
+    uint256 ConstructBlockHash() const
     {
         CBlockHeader block;
         block.nVersion = nVersion;
@@ -401,16 +427,8 @@ public:
         return block.GetHash();
     }
 
-
-    std::string ToString() const
-    {
-        std::string str = "CDiskBlockIndex(";
-        str += CBlockIndex::ToString();
-        str += strprintf("\n                hashBlock=%s, hashPrev=%s)",
-            GetBlockHash().ToString(),
-            hashPrev.ToString());
-        return str;
-    }
+    uint256 GetBlockHash() = delete;
+    std::string ToString() = delete;
 };
 
 /** An in-memory indexed chain of blocks. */
@@ -462,14 +480,14 @@ public:
     /** Return the maximal height in the chain. Is equal to chain.Tip() ? chain.Tip()->nHeight : -1. */
     int Height() const
     {
-        return vChain.size() - 1;
+        return int(vChain.size()) - 1;
     }
 
     /** Set/initialize a chain with a given tip. */
-    void SetTip(CBlockIndex* pindex);
+    void SetTip(CBlockIndex& block);
 
-    /** Return a CBlockLocator that refers to a block in this chain (by default the tip). */
-    CBlockLocator GetLocator(const CBlockIndex* pindex = nullptr) const;
+    /** Return a CBlockLocator that refers to the tip in of this chain. */
+    CBlockLocator GetLocator() const;
 
     /** Find the last common block between this chain and a block index entry. */
     const CBlockIndex* FindFork(const CBlockIndex* pindex) const;
@@ -477,5 +495,11 @@ public:
     /** Find the earliest block with timestamp equal or greater than the given time and height equal or greater than the given height. */
     CBlockIndex* FindEarliestAtLeast(int64_t nTime, int height) const;
 };
+
+/** Get a locator for a block index entry. */
+CBlockLocator GetLocator(const CBlockIndex* index);
+
+/** Construct a list of hash entries to put in a locator.  */
+std::vector<uint256> LocatorEntries(const CBlockIndex* index);
 
 #endif // BITCOIN_CHAIN_H

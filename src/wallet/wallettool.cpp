@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2021 The Bitcoin Core developers
+// Copyright (c) 2016-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -16,6 +16,7 @@
 #include <wallet/wallet.h>
 #include <wallet/walletutil.h>
 
+namespace wallet {
 namespace WalletTool {
 
 // The standard wallet deleter function blocks on the validation interface
@@ -33,7 +34,7 @@ static void WalletCreate(CWallet* wallet_instance, uint64_t wallet_creation_flag
     LOCK(wallet_instance->cs_wallet);
 
     wallet_instance->SetMinVersion(FEATURE_LATEST);
-    wallet_instance->AddWalletFlags(wallet_creation_flags);
+    wallet_instance->InitWalletFlags(wallet_creation_flags);
 
     if (!wallet_instance->IsWalletFlagSet(WALLET_FLAG_DESCRIPTORS)) {
         auto spk_man = wallet_instance->GetOrCreateLegacyScriptPubKeyMan();
@@ -46,7 +47,7 @@ static void WalletCreate(CWallet* wallet_instance, uint64_t wallet_creation_flag
     wallet_instance->TopUpKeyPool();
 }
 
-static const std::shared_ptr<CWallet> MakeWallet(const std::string& name, const fs::path& path, const ArgsManager& args, DatabaseOptions options)
+static std::shared_ptr<CWallet> MakeWallet(const std::string& name, const fs::path& path, const ArgsManager& args, DatabaseOptions options)
 {
     DatabaseStatus status;
     bilingual_str error;
@@ -57,7 +58,7 @@ static const std::shared_ptr<CWallet> MakeWallet(const std::string& name, const 
     }
 
     // dummy chain interface
-    std::shared_ptr<CWallet> wallet_instance{new CWallet(nullptr /* chain */, name, args, std::move(database)), WalletToolReleaseWallet};
+    std::shared_ptr<CWallet> wallet_instance{new CWallet(/*chain=*/nullptr, name, args, std::move(database)), WalletToolReleaseWallet};
     DBErrors load_wallet_ret;
     try {
         load_wallet_ret = wallet_instance->LoadWallet();
@@ -139,6 +140,7 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
 
     if (command == "create") {
         DatabaseOptions options;
+        ReadDatabaseArgs(args, options);
         options.require_create = true;
         // If -legacy is set, use it. Otherwise default to false.
         bool make_legacy = args.GetBoolArg("-legacy", false);
@@ -164,6 +166,7 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
         }
     } else if (command == "info") {
         DatabaseOptions options;
+        ReadDatabaseArgs(args, options);
         options.require_existing = true;
         const std::shared_ptr<CWallet> wallet_instance = MakeWallet(name, path, args, options);
         if (!wallet_instance) return false;
@@ -173,7 +176,7 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
 #ifdef USE_BDB
         bilingual_str error;
         std::vector<bilingual_str> warnings;
-        bool ret = RecoverDatabaseFile(path, error, warnings);
+        bool ret = RecoverDatabaseFile(args, path, error, warnings);
         if (!ret) {
             for (const auto& warning : warnings) {
                 tfm::format(std::cerr, "%s\n", warning.original);
@@ -189,11 +192,12 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
 #endif
     } else if (command == "dump") {
         DatabaseOptions options;
+        ReadDatabaseArgs(args, options);
         options.require_existing = true;
         const std::shared_ptr<CWallet> wallet_instance = MakeWallet(name, path, args, options);
         if (!wallet_instance) return false;
         bilingual_str error;
-        bool ret = DumpWallet(*wallet_instance, error);
+        bool ret = DumpWallet(args, *wallet_instance, error);
         if (!ret && !error.empty()) {
             tfm::format(std::cerr, "%s\n", error.original);
             return ret;
@@ -203,7 +207,7 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
     } else if (command == "createfromdump") {
         bilingual_str error;
         std::vector<bilingual_str> warnings;
-        bool ret = CreateFromDump(name, path, error, warnings);
+        bool ret = CreateFromDump(args, name, path, error, warnings);
         for (const auto& warning : warnings) {
             tfm::format(std::cout, "%s\n", warning.original);
         }
@@ -219,3 +223,4 @@ bool ExecuteWalletToolFunc(const ArgsManager& args, const std::string& command)
     return true;
 }
 } // namespace WalletTool
+} // namespace wallet

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2018-2021 The Bitcoin Core developers
+# Copyright (c) 2018-2022 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """upgradewallet RPC functional test
@@ -45,6 +45,9 @@ def deser_keymeta(f):
     return ver, create_time, kp_str, seed_id, fpr, path_len, path, has_key_orig
 
 class UpgradeWalletTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser, descriptors=False)
+
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 3
@@ -344,6 +347,17 @@ class UpgradeWalletTest(BitcoinTestFramework):
             self.nodes[0].createwallet(wallet_name="desc_upgrade", descriptors=True)
             desc_wallet = self.nodes[0].get_wallet_rpc("desc_upgrade")
             self.test_upgradewallet(desc_wallet, previous_version=169900, expected_version=169900)
+
+            self.log.info("Checking that descriptor wallets without privkeys do nothing, successfully")
+            self.nodes[0].createwallet(wallet_name="desc_upgrade_nopriv", descriptors=True, disable_private_keys=True)
+            desc_wallet = self.nodes[0].get_wallet_rpc("desc_upgrade_nopriv")
+            self.test_upgradewallet(desc_wallet, previous_version=169900, expected_version=169900)
+
+        if self.is_bdb_compiled():
+            self.log.info("Upgrading a wallet with private keys disabled")
+            self.nodes[0].createwallet(wallet_name="privkeys_disabled_upgrade", disable_private_keys=True, descriptors=False)
+            disabled_wallet = self.nodes[0].get_wallet_rpc("privkeys_disabled_upgrade")
+            self.test_upgradewallet(disabled_wallet, previous_version=169900, expected_version=169900)
 
 if __name__ == '__main__':
     UpgradeWalletTest().main()

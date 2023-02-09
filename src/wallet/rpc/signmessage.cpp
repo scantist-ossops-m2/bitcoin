@@ -1,4 +1,4 @@
-// Copyright (c) 2011-2021 The Bitcoin Core developers
+// Copyright (c) 2011-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -10,6 +10,7 @@
 
 #include <univalue.h>
 
+namespace wallet {
 RPCHelpMan signmessage()
 {
     return RPCHelpMan{"signmessage",
@@ -35,7 +36,7 @@ RPCHelpMan signmessage()
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
         {
             const std::shared_ptr<const CWallet> pwallet = GetWalletForJSONRPCRequest(request);
-            if (!pwallet) return NullUniValue;
+            if (!pwallet) return UniValue::VNULL;
 
             LOCK(pwallet->cs_wallet);
 
@@ -66,3 +67,4 @@ RPCHelpMan signmessage()
         },
     };
 }
+} // namespace wallet
