@@ -797,12 +797,12 @@ size_t CConnman::SocketSendData(CNode& node) const
         const auto& data = *it;
         assert(data.size() > node.nSendOffset);
         int nBytes = 0;
+        int flags = MSG_NOSIGNAL | MSG_DONTWAIT;
         {
             LOCK(node.cs_hSocket);
             if (!node.m_sock) {
                 break;
             }
-            int flags = MSG_NOSIGNAL | MSG_DONTWAIT;
 #ifdef MSG_MORE
             if (it + 1 != node.vSendMsg.end()) {
                 flags |= MSG_MORE;
@@ -822,6 +822,12 @@ size_t CConnman::SocketSendData(CNode& node) const
                 it++;
             } else {
                 // could not send full message; stop sending more
+#ifdef MSG_MORE
+                if (flags & MSG_MORE) {
+                    LogPrintf("Aborting MSG_MORE send!\n");
+                    node.m_sock->Send(nullptr, 0, flags & ~MSG_MORE);
+                }
+#endif
                 break;
             }
         } else {
