@@ -933,6 +933,12 @@ private:
                 }
                 case Fragment::AND_V: {
                     auto& x = subres[0], &y = subres[1];
+                    // As the dissatisfaction here only consist of a single option, it doesn't
+                    // actually need to be listed (it's not required for reasoning about malleability of
+                    // other options), and is never required (no valid miniscript relies on the ability
+                    // to satisfy the type V left subexpression). It's still listed here for
+                    // completeness, as a hypothetical (not currently implemented) satisfier that doesn't
+                    // care about malleability might in some cases prefer it still.
                     return {(y.nsat + x.sat).SetNonCanon(), y.sat + x.sat};
                 }
                 case Fragment::AND_B: {
