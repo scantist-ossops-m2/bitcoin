@@ -865,32 +865,51 @@ private:
                     return {ZERO + InputStack(key), (InputStack(std::move(sig)).SetWithSig() + InputStack(key)).SetAvailable(avail)};
                 }
                 case Fragment::MULTI: {
+                    // sats[j] represents the best stack containing j valid signatures (out of the first i keys).
+                    // In the loop below, these stacks are built up using a dynamic programming approach.
+                    // sats[0] starts off being {0}, due to the CHECKMULTISIG bug that pops off one element too many.
                     std::vector<InputStack> sats = Vector(ZERO);
                     for (size_t i = 0; i < node.keys.size(); ++i) {
                         std::vector<unsigned char> sig;
                         Availability avail = ctx.Sign(node.keys[i], sig);
+                        // Compute signature stack for just the i'th key.
                         auto sat = InputStack(std::move(sig)).SetWithSig().SetAvailable(avail);
+                        // Compute the next sats vector: next_sats[0] is a copy of sats[0] (no signatures). All further
+                        // next_sats[j] are equal to either the existing sats[j], or sats[j-1] plus a signature for the
+                        // current (i'th) key. The very last element needs all signatures filled.
                         std::vector<InputStack> next_sats;
                         next_sats.push_back(sats[0]);
                         for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back(sats[j] | (std::move(sats[j - 1]) + sat));
                         next_sats.push_back(std::move(sats[sats.size() - 1]) + std::move(sat));
+                        // Switch over.
                         sats = std::move(next_sats);
                     }
+                    // The dissatisfaction consists of k+1 stack elements all equal to 0.
                     InputStack nsat = ZERO;
                     for (size_t i = 0; i < node.k; ++i) nsat = std::move(nsat) + ZERO;
                     assert(node.k <= sats.size());
                     return {std::move(nsat), std::move(sats[node.k])};
                 }
                 case Fragment::THRESH: {
+                    // sats[k] represents the best stack that satisfies k out of the *last* i subexpressions.
+                    // In the loop below, these stacks are built up using a dynamic programming approach.
+                    // sats[0] starts off empty.
                     std::vector<InputStack> sats = Vector(EMPTY);
                     for (size_t i = 0; i < subres.size(); ++i) {
+                        // Introduce an alias for the i'th last satisfaction/dissatisfaction.
                         auto& res = subres[subres.size() - i - 1];
+                        // Compute the next sats vector: next_sats[0] is sats[0] plus res.nsat (thus containing all dissatisfactions
+                        // so far. next_sats[j] is either sats[j] + res.nsat (reusing j earlier satisfactions) or sats[j-1] + res.sat
+                        // (reusing j-1 earlier satisfactions plus a new one). The very last next_sats[j] is all satisfactions.
                         std::vector<InputStack> next_sats;
                         next_sats.push_back(sats[0] + res.nsat);
                         for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back((sats[j] + res.nsat) | (std::move(sats[j - 1]) + res.sat));
                         next_sats.push_back(std::move(sats[sats.size() - 1]) + std::move(res.sat));
+                        // Switch over.
                         sats = std::move(next_sats);
                     }
+                    // At this point, sats[k].sat is the best satisfaction for the overall thresh() node. The best dissatisfaction
+                    // is computed by gathering all sats[i].nsat for i != k.
                     InputStack nsat = INVALID;
                     for (size_t i = 0; i < sats.size(); ++i) {
                         // i==k is the satisfaction; i==0 is the canonical dissatisfaction;
@@ -900,6 +919,7 @@ private:
                         // should already never be picked in non-malleable solutions due to the
                         // availability of the i=0 form.
                         if (i != 0 && i != node.k) sats[i].SetMalleable().SetNonCanon();
+                        // Include all dissatisfactions (even these non-canonical ones) in nsat.
                         if (i != node.k) nsat = std::move(nsat) | std::move(sats[i]);
                     }
                     assert(node.k <= sats.size());
