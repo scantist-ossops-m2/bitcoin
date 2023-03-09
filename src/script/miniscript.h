@@ -344,13 +344,58 @@ struct Ops {
     Ops(uint32_t in_count, MaxInt<uint32_t> in_sat, MaxInt<uint32_t> in_dsat) : count(in_count), sat(in_sat), dsat(in_dsat) {};
 };
 
-struct StackSize {
-    //! Maximum stack size to satisfy;
-    MaxInt<uint32_t> sat;
-    //! Maximum stack size to dissatisfy;
-    MaxInt<uint32_t> dsat;
+struct SatInfo {
+    //! Whether a canonical satisfaction/dissatisfaction is possible at all.
+    const bool valid;
+    //! How much higher the stack size at start of execution can be compared to at the end.
+    const int32_t netdiff;
+    //! Mow much higher the stack size can be during execution compared to at the end.
+    const int32_t exec;
 
-    StackSize(MaxInt<uint32_t> in_sat, MaxInt<uint32_t> in_dsat) : sat(in_sat), dsat(in_dsat) {};
+    constexpr SatInfo(int32_t in_netdiff, int32_t in_exec) noexcept
+        : valid(true), netdiff(in_netdiff), exec(in_exec) {}
+
+    constexpr SatInfo() noexcept : valid(false), netdiff(0), exec(0) {}
+
+    /** Script concatenation. */
+    constexpr friend SatInfo operator+(const SatInfo& a, const SatInfo& b) noexcept
+    {
+        if (!a.valid || !b.valid) return {};
+        return {a.netdiff + b.netdiff, b.exec > b.netdiff + a.exec ? b.exec : b.netdiff + a.exec};
+    }
+
+    /** Branching. */
+    constexpr friend SatInfo operator|(const SatInfo& a, const SatInfo& b) noexcept
+    {
+        if (!a.valid) return b;
+        if (!b.valid) return a;
+        return {a.netdiff > b.netdiff ? a.netdiff : b.netdiff, a.exec > b.exec ? a.exec : b.exec};
+    }
+};
+
+constexpr SatInfo SI_PUSH{-1, 0}; //!< Any push opcode
+constexpr SatInfo SI_DUP{-1, 0}; //!< OP_DUP
+constexpr SatInfo SI_HASH{0, 0}; //!< OP_HASH160, OP_HASH256, OP_SHA256, OP_RIPEMD160
+constexpr SatInfo SI_EQUALVERIFY{2, 2}; //!< OP_EQUALVERIFY
+constexpr SatInfo SI_CHECKSIG{1, 1}; //!< OP_CHECKSIG
+constexpr SatInfo SI_CHECKTIMEVERIFY{0, 0}; //!< OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY
+constexpr SatInfo SI_SIZE{-1, 0}; //!< OP_SIZE
+constexpr SatInfo SI_EQUAL{1, 1}; //!< OP_EQUAL
+constexpr SatInfo SI_IF{1, 1}; //!< OP_IF, OP_NOTIF
+constexpr SatInfo SI_BOOLOP{1, 1}; //!< OP_BOOLAND, OP_BOOLOR
+constexpr SatInfo SI_STACKMOVE{0, 0}; //!< OP_SWAP, OP_TOALTSTACK, OP_FROMALTSTACK
+constexpr SatInfo SI_IFDUP_TRUE{-1, 0}; //!< OP_IFDUP with true input
+constexpr SatInfo SI_IFDUP_FALSE{0, 0}; //!< OP_IFDUP with false input
+constexpr SatInfo SI_ZERONOTEQUAL{0, 0}; //!< OP_0NOTEQUAL
+constexpr SatInfo SI_VERIFY{1, 1}; //!< OP_VERIFY
+constexpr SatInfo SI_ADD{1, 1}; //!< OP_ADD
+constexpr SatInfo SI_NONE{0, 0}; //!< empty script
+
+struct StackSize {
+    const SatInfo sat, dsat;
+
+    constexpr StackSize(SatInfo in_sat, SatInfo in_dsat) noexcept : sat(in_sat), dsat(in_dsat) {};
+    constexpr StackSize(SatInfo in_both) noexcept : sat(in_both), dsat(in_both) {};
 };
 
 struct WitnessSize {
@@ -849,51 +894,74 @@ private:
     }
 
     internal::StackSize CalcStackSize() const {
+        using namespace internal;
         switch (fragment) {
-            case Fragment::JUST_0: return {{}, 0};
-            case Fragment::JUST_1:
+            case Fragment::JUST_0: return {{}, SI_PUSH};
+            case Fragment::JUST_1: return {SI_PUSH, {}};
             case Fragment::OLDER:
-            case Fragment::AFTER: return {0, {}};
-            case Fragment::PK_K: return {0, 0};
-            case Fragment::PK_H: return {1, 1};
+            case Fragment::AFTER: return {SI_PUSH + SI_CHECKTIMEVERIFY, {}};
+            case Fragment::PK_K: return {SI_PUSH};
+            case Fragment::PK_H: return {SI_DUP + SI_HASH + SI_PUSH + SI_EQUALVERIFY};
             case Fragment::SHA256:
             case Fragment::RIPEMD160:
             case Fragment::HASH256:
-            case Fragment::HASH160: return {1, {}};
+            case Fragment::HASH160: return {SI_SIZE + SI_PUSH + SI_EQUALVERIFY + SI_HASH + SI_PUSH + SI_EQUAL, {}};
             case Fragment::ANDOR: {
-                const auto sat{(subs[0]->ss.sat + subs[1]->ss.sat) | (subs[0]->ss.dsat + subs[2]->ss.sat)};
-                const auto dsat{subs[0]->ss.dsat + subs[2]->ss.dsat};
-                return {sat, dsat};
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                const auto& z{subs[2]->ss};
+                return {(x.sat + SI_IF + y.sat) | (x.dsat + SI_IF + z.sat), x.dsat + SI_IF + z.dsat};
             }
-            case Fragment::AND_V: return {subs[0]->ss.sat + subs[1]->ss.sat, {}};
-            case Fragment::AND_B: return {subs[0]->ss.sat + subs[1]->ss.sat, subs[0]->ss.dsat + subs[1]->ss.dsat};
+            case Fragment::AND_V: {
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                return {x.sat + y.sat, {}};
+            }
+            case Fragment::AND_B: {
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                return {x.sat + y.sat + SI_BOOLOP, x.dsat + y.dsat + SI_BOOLOP};
+            }
             case Fragment::OR_B: {
-                const auto sat{(subs[0]->ss.dsat + subs[1]->ss.sat) | (subs[0]->ss.sat + subs[1]->ss.dsat)};
-                const auto dsat{subs[0]->ss.dsat + subs[1]->ss.dsat};
-                return {sat, dsat};
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                return {((x.sat + y.dsat) | (x.dsat + y.sat)) + SI_BOOLOP, x.dsat + y.dsat + SI_BOOLOP};
             }
-            case Fragment::OR_C: return {subs[0]->ss.sat | (subs[0]->ss.dsat + subs[1]->ss.sat), {}};
-            case Fragment::OR_D: return {subs[0]->ss.sat | (subs[0]->ss.dsat + subs[1]->ss.sat), subs[0]->ss.dsat + subs[1]->ss.dsat};
-            case Fragment::OR_I: return {(subs[0]->ss.sat + 1) | (subs[1]->ss.sat + 1), (subs[0]->ss.dsat + 1) | (subs[1]->ss.dsat + 1)};
-            case Fragment::MULTI: return {k + 1, k + 1};
-            case Fragment::MULTI_A: return {keys.size(), keys.size()};
-            case Fragment::WRAP_A:
-            case Fragment::WRAP_N:
-            case Fragment::WRAP_S: return subs[0]->ss;
-            case Fragment::WRAP_C: return {subs[0]->ss.sat + 1, subs[0]->ss.dsat + 1};
-            case Fragment::WRAP_D: return {1 + subs[0]->ss.sat, 1};
-            case Fragment::WRAP_V: return {subs[0]->ss.sat, {}};
-            case Fragment::WRAP_J: return {subs[0]->ss.sat, 1};
+            case Fragment::OR_C: {
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                return {(x.sat + SI_IF) | (x.dsat + SI_IF + y.sat), {}};
+            }
+            case Fragment::OR_D: {
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                return {(x.sat + SI_IFDUP_TRUE + SI_IF) | (x.dsat + SI_IFDUP_FALSE + SI_IF + y.sat), x.dsat + SI_IFDUP_FALSE + SI_IF + y.dsat};
+            }
+            case Fragment::OR_I: {
+                const auto& x{subs[0]->ss};
+                const auto& y{subs[1]->ss};
+                return {SI_IF + (x.sat | y.sat), SI_IF + (x.dsat | y.dsat)};
+            }
+            case Fragment::MULTI: return {SatInfo(k, k + keys.size() + 2)};
+            case Fragment::MULTI_A: return {SatInfo(keys.size() - 1, keys.size())};
+            case Fragment::WRAP_A: return {SI_STACKMOVE + subs[0]->ss.sat + SI_STACKMOVE, SI_STACKMOVE + subs[0]->ss.dsat + SI_STACKMOVE};
+            case Fragment::WRAP_N: return {subs[0]->ss.sat + SI_ZERONOTEQUAL, subs[0]->ss.dsat + SI_ZERONOTEQUAL};
+            case Fragment::WRAP_S: return {SI_STACKMOVE + subs[0]->ss.sat, SI_STACKMOVE + subs[0]->ss.dsat};
+            case Fragment::WRAP_C: return {subs[0]->ss.sat + SI_CHECKSIG, subs[0]->ss.dsat + SI_CHECKSIG};
+            case Fragment::WRAP_D: return {SI_DUP + SI_IF + subs[0]->ss.sat, SI_DUP + SI_IF};
+            case Fragment::WRAP_V: return {subs[0]->ss.sat + SI_VERIFY, {}};
+            case Fragment::WRAP_J: return {SI_SIZE + SI_ZERONOTEQUAL + SI_IF + subs[0]->ss.sat, SI_SIZE + SI_ZERONOTEQUAL + SI_IF};
             case Fragment::THRESH: {
-                auto sats = Vector(internal::MaxInt<uint32_t>(0));
-                for (const auto& sub : subs) {
-                    auto next_sats = Vector(sats[0] + sub->ss.dsat);
-                    for (size_t j = 1; j < sats.size(); ++j) next_sats.push_back((sats[j] + sub->ss.dsat) | (sats[j - 1] + sub->ss.sat));
-                    next_sats.push_back(sats[sats.size() - 1] + sub->ss.sat);
+                auto sats = Vector(SI_NONE);
+                for (size_t i = 0; i < subs.size(); ++i) {
+                    auto next_sats = Vector(sats[0] + subs[i]->ss.dsat + (i ? SI_ADD : SI_NONE));
+                    for (size_t j = 1; j < sats.size(); ++j) {
+                        next_sats.push_back(((sats[j] + subs[i]->ss.dsat) | (sats[j - 1] + subs[i]->ss.sat)) + (i ? SI_ADD : SI_NONE));
+                    }
+                    next_sats.push_back(sats[sats.size() - 1] + subs[i]->ss.sat + (i ? SI_ADD : SI_NONE));
                     sats = std::move(next_sats);
                 }
-                assert(k <= sats.size());
-                return {sats[k], sats[0]};
+                return {sats[k] + SI_PUSH + SI_EQUAL, sats[0] + SI_PUSH + SI_EQUAL};
             }
         }
         assert(false);
@@ -1285,13 +1353,23 @@ public:
      * This does not account for the P2WSH script push. */
     std::optional<uint32_t> GetStackSize() const {
         if (!ss.sat.valid) return {};
-        return ss.sat.value;
+        return ss.sat.netdiff + 1;
+    }
+
+    //! Return the maximum size of the stack during execution of this script.
+    std::optional<uint32_t> GetExecStackSize() const {
+        if (!ss.sat.valid) return {};
+        return ss.sat.exec + 1;
     }
 
     //! Check the maximum stack size for this script against the policy limit.
     bool CheckStackSize() const {
-        // TODO: MAX_STACK_SIZE during script execution under Tapscript.
-        if (IsTapscript(m_script_ctx)) return true;
+        // Since in Tapscript there is no standardness limit on the script and witness sizes, we may run
+        // into the maximum stack size while executing the script. Make sure it doesn't happen.
+        if (IsTapscript(m_script_ctx)) {
+            if (const auto exec_ss = GetExecStackSize()) return exec_ss <= MAX_STACK_SIZE;
+            return true;
+        }
         if (const auto ss = GetStackSize()) return *ss <= MAX_STANDARD_P2WSH_STACK_ITEMS;
         return true;
     }
