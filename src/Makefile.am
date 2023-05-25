@@ -154,6 +154,7 @@ BITCOIN_CORE_H = \
   consensus/tx_verify.h \
   core_io.h \
   core_memusage.h \
+  cluster_linearize.h \
   cuckoocache.h \
   dbwrapper.h \
   deploymentinfo.h \
