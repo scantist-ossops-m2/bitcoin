@@ -17,7 +17,9 @@
 #include <policy/policy.h>
 #include <policy/settings.h>
 #include <reverse_iterator.h>
+#include <util/bitset.h>
 #include <util/check.h>
+#include <util/feefrac.h>
 #include <util/moneystr.h>
 #include <util/overflow.h>
 #include <util/result.h>
@@ -1672,25 +1674,77 @@ void Cluster::Sort(bool reassign_locations)
 }
 #endif
 
+namespace {
+
+template <typename SetType>
+std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> InvokeSort(bool reassign_locations, size_t tx_count, const std::vector<Cluster::Chunk>& chunks)
+{
+    std::vector<std::tuple<double, size_t, size_t>> timings;
+    std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> txs;
+    cluster_linearize::Cluster<SetType> cluster;
+    for (int i = 0; i < 5; ++i) {
+        const auto time_3{SteadyClock::now()};
+        std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> orig_txs;
+        std::vector<std::pair<const CTxMemPoolEntry*, unsigned>> entry_to_index;
+        cluster_linearize::LinearizationResult result;
+
+        cluster.reserve(tx_count);
+        entry_to_index.reserve(tx_count);
+        cluster.clear();
+        for (auto &chunk : chunks) {
+            for (auto tx : chunk.txs) {
+                orig_txs.emplace_back(tx);
+                cluster.emplace_back(FeeFrac(tx.get().GetModifiedFee(), tx.get().GetTxSize()), SetType{});
+                entry_to_index.emplace_back(&(tx.get()), cluster.size() - 1);
+            }
+        }
+        std::sort(entry_to_index.begin(), entry_to_index.end());
+        for (size_t i=0; i<orig_txs.size(); ++i) {
+            for (auto& parent : orig_txs[i].get().GetMemPoolParentsConst()) {
+                auto it = std::lower_bound(entry_to_index.begin(), entry_to_index.end(), &(parent.get()),
+                    [&](const auto& a, const auto& b) { return std::less<const CTxMemPoolEntry*>()(a.first, b); });
+                assert(it != entry_to_index.end());
+                assert(it->first == &(parent.get()));
+                cluster[i].second.Set(it->second);
+            }
+        }
+        result = cluster_linearize::LinearizeCluster(cluster, 0, 0);
+        txs.clear();
+        for (auto index : result.linearization) {
+            txs.push_back(orig_txs[index]);
+        }
+        const auto time_4{SteadyClock::now()};
+        timings.emplace_back(Ticks<MillisecondsDouble>(time_4-time_3), result.iterations, result.comparisons);
+    }
+    if (tx_count >= 10) {
+        std::sort(timings.begin(), timings.end());
+        LogPrint(BCLog::BENCH, "InvokeSort linearize cluster: %zu txs, %.4fms, %u iter, %.1fns/iter, %u comps, %.1fns/comp, encoding: %s\n", tx_count, std::get<0>(timings[2]), std::get<1>(timings[2]), std::get<0>(timings[2]) * 1000000.0 / std::get<1>(timings[2]), std::get<2>(timings[2]), std::get<0>(timings[2]) * 1000000.0 / std::get<2>(timings[2]), HexStr(cluster_linearize::DumpCluster(cluster)));
+    }
+    return txs;
+}
+
+} // namespace
+
 void Cluster::Sort(bool reassign_locations)
 {
-    //const auto time_start{SteadyClock::now()};
-    if (m_tx_count <= 64) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::IntBitSet<uint64_t>>>(reassign_locations);
+    std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> txs;
+    if (m_tx_count <= 32) {
+        txs = InvokeSort<BitSet<32>>(reassign_locations, m_tx_count, m_chunks);
+    } else if (m_tx_count <= 64) {
+        txs = InvokeSort<BitSet<64>>(reassign_locations, m_tx_count, m_chunks);
     } else if (m_tx_count <= 128) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::MultiIntBitSet<uint64_t, 2>>>(reassign_locations);
+        txs = InvokeSort<BitSet<128>>(reassign_locations, m_tx_count, m_chunks);
     } else if (m_tx_count <= 192) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::MultiIntBitSet<uint64_t, 3>>>(reassign_locations);
+        txs = InvokeSort<BitSet<192>>(reassign_locations, m_tx_count, m_chunks);
     } else if (m_tx_count <= 256) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::MultiIntBitSet<uint64_t, 4>>>(reassign_locations);
+        txs = InvokeSort<BitSet<256>>(reassign_locations, m_tx_count, m_chunks);
     } else if (m_tx_count <= 320) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::MultiIntBitSet<uint64_t, 5>>>(reassign_locations);
+        txs = InvokeSort<BitSet<320>>(reassign_locations, m_tx_count, m_chunks);
     } else if (m_tx_count <= 384) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::MultiIntBitSet<uint64_t, 6>>>(reassign_locations);
+        txs = InvokeSort<BitSet<384>>(reassign_locations, m_tx_count, m_chunks);
     } else if (m_tx_count <= 1280) {
-        InvokeSort<cluster_linearize::Cluster<cluster_linearize::MultiIntBitSet<uint64_t, 20>>>(reassign_locations);
+        txs = InvokeSort<BitSet<1280>>(reassign_locations, m_tx_count, m_chunks);
     } else {
-        std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> txs;
         // Only do the topological sort for big clusters
         for (auto &chunk : m_chunks) {
             for (auto chunk_tx : chunk.txs) {
@@ -1698,11 +1752,8 @@ void Cluster::Sort(bool reassign_locations)
             }
         }
         std::sort(txs.begin(), txs.end(), CompareByAncestorCount());
-        RechunkFromLinearization(txs, reassign_locations);
     }
-    //const auto time_2{SteadyClock::now()};
-    //LogPrint(BCLog::BENCH, "Ancestor Sort: %zu txs %.4fms\n", m_tx_count, Ticks<MillisecondsDouble>(time_2-time_start));
-    //printf("Ancestor Sort: %zu txs %.4fms\n", m_tx_count, Ticks<MillisecondsDouble>(time_2-time_start));
+    RechunkFromLinearization(txs, reassign_locations);
 }
 
 void Cluster::Rechunk()
@@ -1786,3 +1837,5 @@ void Cluster::Merge(std::vector<Cluster*>::iterator first, std::vector<Cluster*>
     }
     assert(m_tx_count == total_txs);
 }
+
+
