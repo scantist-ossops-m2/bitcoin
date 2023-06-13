@@ -10,6 +10,7 @@
 #include <test/util/setup_common.h>
 #include <uint256.h>
 #include <util/bitdeque.h>
+#include <util/bitset.h>
 #include <util/fs.h>
 #include <util/fs_helpers.h>
 #include <util/message.h> // For MessageSign(), MessageVerify(), MESSAGE_MAGIC
