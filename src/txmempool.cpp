@@ -1679,11 +1679,13 @@ namespace {
 template <typename SetType>
 std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> InvokeSort(bool reassign_locations, size_t tx_count, const std::vector<Cluster::Chunk>& chunks)
 {
-    std::vector<std::tuple<double, size_t, size_t>> timings;
+    std::vector<std::tuple<double, double, double, size_t, size_t>> timings;
+    unsigned loops = (tx_count < 10) ? 1 : 11 + (200 / tx_count);
+    timings.reserve(loops);
     std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> txs;
     cluster_linearize::Cluster<SetType> cluster;
-    for (int i = 0; i < 5; ++i) {
-        const auto time_3{SteadyClock::now()};
+    for (int i = 0; i < loops; ++i) {
+        const auto time_1{SteadyClock::now()};
         std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> orig_txs;
         std::vector<std::pair<const CTxMemPoolEntry*, unsigned>> entry_to_index;
         cluster_linearize::LinearizationResult result;
@@ -1708,17 +1710,20 @@ std::vector<CTxMemPoolEntry::CTxMemPoolEntryRef> InvokeSort(bool reassign_locati
                 cluster[i].second.Set(it->second);
             }
         }
+        const auto time_2{SteadyClock::now()};
         result = cluster_linearize::LinearizeCluster(cluster, 0, 0);
+        const auto time_3{SteadyClock::now()};
         txs.clear();
         for (auto index : result.linearization) {
             txs.push_back(orig_txs[index]);
         }
         const auto time_4{SteadyClock::now()};
-        timings.emplace_back(Ticks<MillisecondsDouble>(time_4-time_3), result.iterations, result.comparisons);
+        timings.emplace_back(Ticks<MillisecondsDouble>(time_4-time_1), Ticks<MillisecondsDouble>(time_3-time_2), Ticks<MillisecondsDouble>((time_4-time_3)+(time_2-time_1)), result.iterations, result.comparisons);
     }
     if (tx_count >= 10) {
         std::sort(timings.begin(), timings.end());
-        LogPrint(BCLog::BENCH, "InvokeSort linearize cluster: %zu txs, %.4fms, %u iter, %.1fns/iter, %u comps, %.1fns/comp, encoding: %s\n", tx_count, std::get<0>(timings[2]), std::get<1>(timings[2]), std::get<0>(timings[2]) * 1000000.0 / std::get<1>(timings[2]), std::get<2>(timings[2]), std::get<0>(timings[2]) * 1000000.0 / std::get<2>(timings[2]), HexStr(cluster_linearize::DumpCluster(cluster)));
+        auto [tot_time, lin_time, conv_time, iters, comps] = timings[loops / 2];
+        LogPrint(BCLog::BENCH, "InvokeSort linearize cluster: %zu txs, %.4fms (lin %.4fms, conv %.4fms), %u iter, %.1fns/iter, %u comps, %.1fns/comp, encoding: %s\n", tx_count, tot_time, lin_time, conv_time, iters, 1000000.0 * lin_time / iters, comps, 1000000.0 * lin_time / comps, HexStr(cluster_linearize::DumpCluster(cluster)));
     }
     return txs;
 }
