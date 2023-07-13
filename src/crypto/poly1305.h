@@ -19,9 +19,9 @@ namespace poly1305_donna {
 // poly1305-donna-32.h from https://github.com/floodyberry/poly1305-donna
 
 typedef struct {
-    uint32_t r[5];
-    uint32_t h[5];
-    uint32_t pad[4];
+    uint64_t r[2];
+    uint64_t h[3];
+    uint64_t pad[2];
     size_t leftover;
     unsigned char buffer[POLY1305_BLOCK_SIZE];
     unsigned char final;
