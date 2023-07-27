@@ -912,6 +912,418 @@ size_t V1Transport::GetSendMemoryUsage() const noexcept
     return m_message_to_send.GetMemoryUsage();
 }
 
+V2Transport::V2Transport(NodeId nodeid, bool initiating, int type_in, int version_in) noexcept :
+    m_cipher{}, m_initiating{initiating}, m_nodeid{nodeid},
+    m_recv_type{type_in}, m_recv_version{version_in},
+    m_recv_state{RecvState::KEY},
+    m_send_state{SendState::KEY}
+{
+    // Initialize the send buffer with ellswift pubkey.
+    m_send_buffer.resize(EllSwiftPubKey::size());
+    std::copy(std::begin(m_cipher.GetOurPubKey()), std::end(m_cipher.GetOurPubKey()), MakeWritableByteSpan(m_send_buffer).begin());
+}
+
+V2Transport::V2Transport(NodeId nodeid, bool initiating, int type_in, int version_in, const CKey& key, Span<const std::byte> ent32) noexcept :
+    m_cipher{key, ent32}, m_initiating{initiating}, m_nodeid{nodeid},
+    m_recv_type{type_in}, m_recv_version{version_in},
+    m_recv_state{RecvState::KEY},
+    m_send_state{SendState::KEY}
+{
+    // Initialize the send buffer with ellswift pubkey.
+    m_send_buffer.resize(EllSwiftPubKey::size());
+    std::copy(std::begin(m_cipher.GetOurPubKey()), std::end(m_cipher.GetOurPubKey()), MakeWritableByteSpan(m_send_buffer).begin());
+}
+
+void V2Transport::SetReceiveState(RecvState recv_state) noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    // No-op if no change is desired.
+    if (recv_state == m_recv_state) return;
+    // Enforce allowed state transitions.
+    switch (m_recv_state) {
+    case RecvState::KEY:
+        Assume(recv_state == RecvState::GARB_GARBTERM);
+        break;
+    case RecvState::GARB_GARBTERM:
+        Assume(recv_state == RecvState::GARBAUTH);
+        break;
+    case RecvState::GARBAUTH:
+        Assume(recv_state == RecvState::VERSION);
+        break;
+    case RecvState::VERSION:
+        Assume(recv_state == RecvState::APP);
+        break;
+    case RecvState::APP:
+        Assume(recv_state == RecvState::APP_READY);
+        break;
+    case RecvState::APP_READY:
+        Assume(recv_state == RecvState::APP);
+        break;
+    }
+    // Change state.
+    m_recv_state = recv_state;
+}
+
+void V2Transport::SetSendState(SendState send_state) noexcept
+{
+    AssertLockHeld(m_send_mutex);
+    // No-op if no change is desired.
+    if (send_state == m_send_state) return;
+    // Enforce allowed state transitions.
+    switch (m_send_state) {
+    case SendState::KEY:
+        Assume(send_state == SendState::KEY_GARBTERM_GARBAUTH_VERSION);
+        break;
+    case SendState::KEY_GARBTERM_GARBAUTH_VERSION:
+        Assume(send_state == SendState::APP_READY);
+        break;
+    case SendState::APP_READY:
+        Assume(send_state == SendState::APP);
+        break;
+    case SendState::APP:
+        Assume(send_state == SendState::APP_READY);
+        break;
+    }
+    // Change state.
+    m_send_state = send_state;
+}
+
+bool V2Transport::ReceivedMessageComplete() const noexcept
+{
+    AssertLockNotHeld(m_recv_mutex);
+    LOCK(m_recv_mutex);
+    return m_recv_state == RecvState::APP_READY;
+}
+
+size_t V2Transport::GetMaxBytesToProcess() noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    switch (m_recv_state) {
+    case RecvState::KEY:
+        // During the KEY state, we only allow the 64-byte key into the receive buffer.
+        Assume(m_recv_buffer.size() <= EllSwiftPubKey::size());
+        // As long as we have not received the other side's public key, don't receive more than
+        // that (64 bytes), as garbage follows, and locating the garbage terminator requires the
+        // key exchange first.
+        return EllSwiftPubKey::size() - m_recv_buffer.size();
+    case RecvState::GARB_GARBTERM:
+        // Process garbage bytes one by one (because terminator may appear anywhere).
+        return 1;
+    case RecvState::GARBAUTH:
+    case RecvState::VERSION:
+    case RecvState::APP:
+        // These three states all involve decoding a packet. Process the length descriptor first,
+        // followed by the ciphertext.
+        if (m_recv_buffer.size() < BIP324Cipher::LENGTH_LEN) {
+            return BIP324Cipher::LENGTH_LEN - m_recv_buffer.size();
+        } else {
+            // Note that BIP324Cipher::EXPANSION is the total difference between contents size
+            // and encoded packet size, which includes the 3 bytes due to the packet length.
+            // When transitioning from receiving the packet length to receiving its ciphertext,
+            // the encrypted packet length is left in the receive buffer.
+            return BIP324Cipher::EXPANSION + m_recv_len - m_recv_buffer.size();
+        }
+    case RecvState::APP_READY:
+        // No bytes can be processed until GetMessage() is called.
+        return 0;
+    }
+    Assume(false); // unreachable
+    return 0;
+}
+
+void V2Transport::ProcessReceivedKey() noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    AssertLockNotHeld(m_send_mutex);
+    Assume(m_recv_state == RecvState::KEY);
+    if (m_recv_buffer.size() == EllSwiftPubKey::size()) {
+        // Other side's key has been fully received.
+
+        // Initialize the ciphers.
+        EllSwiftPubKey ellswift(MakeByteSpan(m_recv_buffer));
+        LOCK(m_send_mutex);
+        m_cipher.Initialize(ellswift, m_initiating);
+
+        // Switch receiver state to GARB_GARBTERM.
+        SetReceiveState(RecvState::GARB_GARBTERM);
+        m_recv_buffer.clear();
+
+        // Switch sender state to KEY_GARBTERM_GARBAUTH_VERSION.
+        SetSendState(SendState::KEY_GARBTERM_GARBAUTH_VERSION);
+        // Append the garbage terminator to the send buffer.
+        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::GARBAGE_TERMINATOR_LEN);
+        std::copy(m_cipher.GetSendGarbageTerminator().begin(),
+                  m_cipher.GetSendGarbageTerminator().end(),
+                  MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::GARBAGE_TERMINATOR_LEN).begin());
+        // Construct garbage authentication packet in the send buffer.
+        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::EXPANSION);
+        m_cipher.Encrypt(
+            {},
+            {}, /* empty garbage for now */
+            false,
+            MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::EXPANSION));
+        // Construct version packet in the send buffer.
+        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::EXPANSION + VERSION_CONTENTS.size());
+        m_cipher.Encrypt(
+            VERSION_CONTENTS,
+            {},
+            false,
+            MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::EXPANSION + VERSION_CONTENTS.size()));
+    }
+}
+
+bool V2Transport::ProcessReceivedGarbage() noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    Assume(m_recv_state == RecvState::GARB_GARBTERM);
+    Assume(m_recv_buffer.size() <= MAX_GARBAGE_LEN + BIP324Cipher::GARBAGE_TERMINATOR_LEN);
+    if (m_recv_buffer.size() >= BIP324Cipher::GARBAGE_TERMINATOR_LEN) {
+        if (MakeByteSpan(m_recv_buffer).last(BIP324Cipher::GARBAGE_TERMINATOR_LEN) == m_cipher.GetReceiveGarbageTerminator()) {
+            // Garbage terminator received. Switch to receiving garbage authentication packet.
+            m_recv_garbage = std::move(m_recv_buffer);
+            m_recv_garbage.resize(m_recv_garbage.size() - BIP324Cipher::GARBAGE_TERMINATOR_LEN);
+            m_recv_buffer.clear();
+            SetReceiveState(RecvState::GARBAUTH);
+        } else if (m_recv_buffer.size() == MAX_GARBAGE_LEN + BIP324Cipher::GARBAGE_TERMINATOR_LEN) {
+            // We've reached the maximum length for garbage + garbage terminator, and the
+            // terminator still does not match. Abort.
+            LogPrint(BCLog::NET, "V2 transport error: missing garbage terminator, peer=%d\n", m_nodeid);
+            return false;
+        }
+    }
+    return true;
+}
+
+bool V2Transport::ProcessReceivedPacket() noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    Assume(m_recv_state == RecvState::GARBAUTH || m_recv_state == RecvState::VERSION ||
+           m_recv_state == RecvState::APP);
+
+    // The maximum permitted contents length for a packet.
+    static constexpr size_t MAX_CONTENTS_LEN =
+        1 + CMessageHeader::COMMAND_SIZE + // The maximum length for encoding the message type.
+        std::min<size_t>(MAX_SIZE, MAX_PROTOCOL_MESSAGE_LENGTH); // The maximum payload.
+
+    if (m_recv_buffer.size() == BIP324Cipher::LENGTH_LEN) {
+        // Length descriptor received.
+        m_recv_len = m_cipher.DecryptLength(MakeByteSpan(m_recv_buffer));
+        if (m_recv_len > MAX_CONTENTS_LEN) {
+            LogPrint(BCLog::NET, "V2 transport error: packet too large (%u bytes), peer=%d\n", m_recv_len, m_nodeid);
+            return false;
+        }
+    } else if (m_recv_buffer.size() > BIP324Cipher::LENGTH_LEN && m_recv_buffer.size() == m_recv_len + BIP324Cipher::EXPANSION) {
+        // Ciphertext received, decrypt it into m_recv_decode_buffer.
+        // Note that it is impossible to reach this branch without hitting the branch above first,
+        // as GetMaxBytesToProcess only allows up to LENGTH_LEN into the buffer before that point.
+        m_recv_decode_buffer.resize(m_recv_len);
+        bool ignore{false};
+        Span<const std::byte> aad;
+        if (m_recv_state == RecvState::GARBAUTH) aad = MakeByteSpan(m_recv_garbage);
+        bool ret = m_cipher.Decrypt(
+            MakeByteSpan(m_recv_buffer).subspan(BIP324Cipher::LENGTH_LEN),
+            aad,
+            ignore,
+            MakeWritableByteSpan(m_recv_decode_buffer));
+        if (!ret) {
+            LogPrint(BCLog::NET, "V2 transport error: packet decryption failure (%u bytes), peer=%d\n", m_recv_len, m_nodeid);
+            return false;
+        }
+        // Feed the last 4 bytes of the Poly1305 authentication tag (and its timing) into our RNG.
+        RandAddEvent(ReadLE32(m_recv_buffer.data() + m_recv_buffer.size() - 4));
+
+        // At this point we have a valid packet decrypted into m_recv_decode_buffer. Depending on
+        // the current state, decide what to do with it.
+        switch (m_recv_state) {
+        case RecvState::GARBAUTH:
+            // Ignore flag does not matter for garbage authentication. Any valid packet functions
+            // as authentication. Receive and process the version packet next.
+            SetReceiveState(RecvState::VERSION);
+            m_recv_garbage = {};
+            break;
+        case RecvState::VERSION:
+            if (!ignore) {
+                // Version message received; transition to application phase. The contents is
+                // ignored, but can be used for future extensions.
+                SetReceiveState(RecvState::APP);
+            }
+            break;
+        case RecvState::APP:
+            if (!ignore) {
+                // Application message decrypted correctly. It can be extracted using GetMessage().
+                SetReceiveState(RecvState::APP_READY);
+            }
+            break;
+        default:
+            // Any other state is invalid (this function should not have been called).
+            Assume(false);
+        }
+        // Wipe the receive buffer where the next packet will be received into.
+        m_recv_buffer = {};
+        // In all but APP_READY state, we can wipe the decoded contents.
+        if (m_recv_state != RecvState::APP_READY) m_recv_decode_buffer = {};
+    }
+    return true;
+}
+
+bool V2Transport::ReceivedBytes(Span<const uint8_t>& msg_bytes) noexcept
+{
+    AssertLockNotHeld(m_recv_mutex);
+    LOCK(m_recv_mutex);
+    while (!msg_bytes.empty()) {
+        // Decide how many bytes to copy from msg_bytes to m_recv_buffer.
+        size_t max_read = GetMaxBytesToProcess();
+        // Can't read more than provided input.
+        max_read = std::min(msg_bytes.size(), max_read);
+        // Copy data to buffer.
+        m_recv_buffer.insert(m_recv_buffer.end(), UCharCast(msg_bytes.data()), UCharCast(msg_bytes.data() + max_read));
+        msg_bytes = msg_bytes.subspan(max_read);
+
+        // Process data in the buffer.
+        switch (m_recv_state) {
+        case RecvState::KEY:
+            ProcessReceivedKey();
+            break;
+
+        case RecvState::GARB_GARBTERM:
+            if (!ProcessReceivedGarbage()) return false;
+            break;
+
+        case RecvState::GARBAUTH:
+        case RecvState::VERSION:
+        case RecvState::APP:
+            if (!ProcessReceivedPacket()) return false;
+            break;
+
+        case RecvState::APP_READY:
+            return true;
+        }
+    }
+
+    return true;
+}
+
+std::optional<std::string> V2Transport::GetMessageType(Span<const uint8_t>& contents) noexcept
+{
+    if (contents.size() == 0) return std::nullopt; // Empty contents
+    uint8_t first_byte = contents[0];
+    contents = contents.subspan(1); // Strip first byte.
+
+    if (first_byte != 0) return std::nullopt; // TODO: implement short encoding
+
+    if (contents.size() < CMessageHeader::COMMAND_SIZE) {
+        return std::nullopt; // Long encoding needs 12 message type bytes.
+    }
+
+    size_t msg_type_len{0};
+    while (msg_type_len < CMessageHeader::COMMAND_SIZE && contents[msg_type_len] != 0) {
+        // Verify that message type bytes before the first 0x00 are in range.
+        if (contents[msg_type_len] < ' ' || contents[msg_type_len] > 0x7F) {
+            return {};
+        }
+        ++msg_type_len;
+    }
+    std::string ret{reinterpret_cast<const char*>(contents.data()), msg_type_len};
+    while (msg_type_len < CMessageHeader::COMMAND_SIZE) {
+        // Verify that message type bytes after the first 0x00 are also 0x00.
+        if (contents[msg_type_len] != 0) return {};
+        ++msg_type_len;
+    }
+    // Strip message type bytes of contents.
+    contents = contents.subspan(CMessageHeader::COMMAND_SIZE);
+    return {std::move(ret)};
+}
+
+CNetMessage V2Transport::GetReceivedMessage(std::chrono::microseconds time, bool& reject_message) noexcept
+{
+    AssertLockNotHeld(m_recv_mutex);
+    LOCK(m_recv_mutex);
+    Assume(m_recv_state == RecvState::APP_READY);
+    Span<const uint8_t> contents{m_recv_decode_buffer};
+    auto msg_type = GetMessageType(contents);
+    CDataStream ret(m_recv_type, m_recv_version);
+    CNetMessage msg{std::move(ret)};
+    // Note that BIP324Cipher::EXPANSION also includes the length descriptor size.
+    msg.m_raw_message_size = m_recv_decode_buffer.size() + BIP324Cipher::EXPANSION;
+    if (msg_type) {
+        reject_message = false;
+        msg.m_type = std::move(*msg_type);
+        msg.m_time = time;
+        msg.m_message_size = contents.size();
+        msg.m_recv.resize(contents.size());
+        std::copy(contents.begin(), contents.end(), UCharCast(msg.m_recv.data()));
+    } else {
+        LogPrint(BCLog::NET, "V2 transport error: invalid message type (%u bytes contents), peer=%d\n", m_recv_decode_buffer.size(), m_nodeid);
+        reject_message = true;
+    }
+    m_recv_decode_buffer = {};
+    SetReceiveState(RecvState::APP);
+
+    return msg;
+}
+
+bool V2Transport::SetMessageToSend(CSerializedNetMsg& msg) noexcept
+{
+    AssertLockNotHeld(m_send_mutex);
+    LOCK(m_send_mutex);
+    if (m_send_state != SendState::APP_READY) return false;
+    // Construct contents (encoding message type + payload).
+    // Initialize with zeroes, and then write the message type string starting at offset 1.
+    // This means contents[0] and the unused positions in contents[1..13] remain 0x00.
+    std::vector<uint8_t> contents(1 + CMessageHeader::COMMAND_SIZE + msg.data.size(), 0);
+    std::copy(msg.m_type.begin(), msg.m_type.end(), contents.data() + 1);
+    std::copy(msg.data.begin(), msg.data.end(), contents.begin() + 1 + CMessageHeader::COMMAND_SIZE);
+    // Construct ciphertext in send buffer.
+    m_send_buffer.resize(contents.size() + BIP324Cipher::EXPANSION);
+    m_cipher.Encrypt(MakeByteSpan(contents), {}, false, MakeWritableByteSpan(m_send_buffer));
+    // Switch to APP state, preventing setting another message while this one is not sent.
+    m_send_type = msg.m_type;
+    SetSendState(SendState::APP);
+    // Release memory
+    msg.data = {};
+    return true;
+}
+
+Transport::BytesToSend V2Transport::GetBytesToSend(bool have_next_message) const noexcept
+{
+    AssertLockNotHeld(m_send_mutex);
+    LOCK(m_send_mutex);
+    Assume(m_send_pos <= m_send_buffer.size());
+    return {
+        Span{m_send_buffer}.subspan(m_send_pos),
+        // We only have more to send after the current m_send_buffer if there is a (next)
+        // message to be sent, and we're in one of the APP states (during which those can
+        // be sent), or in the KEY_GARBTERM_GARBAUTH_VERSION (after which we automatically
+        // transition to the APP_READY state).
+        have_next_message && (m_send_state == SendState::APP ||
+                              m_send_state == SendState::APP_READY ||
+                              m_send_state == SendState::KEY_GARBTERM_GARBAUTH_VERSION),
+        m_send_type
+    };
+}
+
+void V2Transport::MarkBytesSent(size_t bytes_sent) noexcept
+{
+    AssertLockNotHeld(m_send_mutex);
+    LOCK(m_send_mutex);
+    m_send_pos += bytes_sent;
+    Assume(m_send_pos <= m_send_buffer.size());
+    if (m_send_state == SendState::KEY_GARBTERM_GARBAUTH_VERSION || m_send_state == SendState::APP) {
+        if (m_send_pos == m_send_buffer.size()) {
+            SetSendState(SendState::APP_READY);
+            m_send_pos = 0;
+            m_send_buffer = {};
+        }
+    }
+}
+
+size_t V2Transport::GetSendMemoryUsage() const noexcept
+{
+    AssertLockNotHeld(m_send_mutex);
+    LOCK(m_send_mutex);
+    return sizeof(m_send_buffer) + memusage::DynamicUsage(m_send_buffer);
+}
+
 std::pair<size_t, bool> CConnman::SocketSendData(CNode& node) const
 {
     auto it = node.vSendMsg.begin();
@@ -922,7 +1334,8 @@ std::pair<size_t, bool> CConnman::SocketSendData(CNode& node) const
     while (true) {
         if (it != node.vSendMsg.end()) {
             // If possible, move one message from the send queue to the transport. This fails when
-            // there is an existing message still being sent.
+            // there is an existing message still being sent, or (for v2 transports) when the
+            // handshake has not yet completed.
             size_t memusage = it->GetMemoryUsage();
             if (node.m_transport->SetMessageToSend(*it)) {
                 // Update memory usage of send buffer (as *it will be deleted).

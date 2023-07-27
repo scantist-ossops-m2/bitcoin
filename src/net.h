@@ -6,6 +6,7 @@
 #ifndef BITCOIN_NET_H
 #define BITCOIN_NET_H
 
+#include <bip324.h>
 #include <chainparams.h>
 #include <common/bloom.h>
 #include <compat/compat.h>
@@ -298,7 +299,8 @@ public:
      *  - Span<const uint8_t> to_send: span of bytes to be sent over the wire (possibly empty).
      *  - bool more: whether there will be more bytes to be sent after the ones in to_send are
      *    all sent (as signaled by MarkBytesSent()).
-     *  - const std::string& m_type: message type on behalf of which this is being sent.
+     *  - const std::string& m_type: message type on behalf of which this is being sent
+     *    ("" for bytes that are not on behalf of any message).
      */
     using BytesToSend = std::tuple<
         Span<const uint8_t> /*to_send*/,
@@ -411,6 +413,194 @@ public:
 
     CNetMessage GetReceivedMessage(std::chrono::microseconds time, bool& reject_message) override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
 
+    bool SetMessageToSend(CSerializedNetMsg& msg) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
+    BytesToSend GetBytesToSend(bool have_next_message) const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
+    void MarkBytesSent(size_t bytes_sent) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
+    size_t GetSendMemoryUsage() const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
+};
+
+class V2Transport final : public Transport
+{
+private:
+    /** Contents of the version packet to send. BIP324 stipulates that senders should leave this
+     *  empty, and receivers should ignore it. Future extensions can change what is sent as long as
+     *  an empty version packet contents is interpreted as no extensions supported. */
+    static constexpr std::array<std::byte, 0> VERSION_CONTENTS = {};
+
+    // The sender side and receiver side of V2Transport are largely independent state machines that
+    // are transitioned through, where each state corresponds to the meaning of the data in (or to
+    // be received to) the respective (send/receive) buffer. The sender side is primarily
+    // controlled by send-side functions (SetMessageToSend, MarkBytesSent), while the received side
+    // is primarily controlled by receiver-side functions (ReceivedBytes, GetReceivedMessage),
+    // though in some cases the sender state can also change as a result of receiving bytes.
+
+    /** State type that defines the current contents of the receive buffer and/or how the next
+     *  received bytes added to it will be interpreted.
+     *
+     * Diagram:
+     *
+     *   start                                            /---------\
+     *     |                                              |         |
+     *     v                                              v         |
+     *    KEY -> GARB_GARBTERM -> GARBAUTH -> VERSION -> APP -> APP_READY
+     */
+    enum class RecvState : uint8_t {
+        /** Public key.
+         *
+         * This is the initial state, during which the other side's public key is
+         * received. When that information arrives, the ciphers get initialized and the state
+         * becomes GARB_GARBTERM. */
+        KEY,
+
+        /** Garbage and garbage terminator.
+         *
+         * Whenever a byte is received, the last 16 bytes are compared with the expected garbage
+         * terminator. When that happens, the state becomes GARBAUTH. If no matching terminator is
+         * received in 4111 bytes (4095 for the maximum garbage length, and 16 bytes for the
+         * terminator), the connection aborts. */
+        GARB_GARBTERM,
+
+        /** Garbage authentication packet.
+         *
+         * A packet is received, and decrypted/verified with AAD set to the garbage received during
+         * the GARB_GARBTERM state. If that succeeds, the state becomes VERSION. If it fails the
+         * connection aborts. */
+        GARBAUTH,
+
+        /** Version packet.
+         *
+         * A packet is received, and decrypted/verified. If that succeeds, the state becomes APP,
+         * and the decrypted contents is interpreted as version negotiation (currently, that means
+         * ignoring it, but it can be used for negotiating future extensions). If it fails, the
+         * connection aborts. */
+        VERSION,
+
+        /** Application packet.
+         *
+         * A packet is received, and decrypted/verified. If that succeeds, the state becomes
+         * APP_READY and the decrypted contents is kept in m_recv_decode_buffer until it is
+         * retrieved as a message by GetMessage(). */
+        APP,
+
+        /** Nothing (an application packet is available for GetMessage()).
+         *
+         * Nothing can be received in this state. When the message is retrieved by GetMessage,
+         * the state becomes APP again. */
+        APP_READY,
+    };
+
+    /** State type that defines the contents of the send buffer.
+     *
+     * Diagram:
+     *
+     *   start                                       /----------\
+     *     |                                         |          |
+     *     v                                         v          |
+     *    KEY -> KEY_GARBTERM_GARBAUTH_VERSION -> APP_READY -> APP
+     */
+    enum class SendState : uint8_t {
+        /** Public key.
+         *
+         * This is the initial state. The public key is sent out. When the receiver
+         * receives the other side's public key and transitions to GARB_GARBTERM, the sender state
+         * becomes KEY_GARBTERM_GARBAUTH_VERSION. The key is left in the send buffer when this
+         * happens, because it may not have been fully sent out yet. */
+        KEY,
+
+        /** Public key + garbage terminator + garbage authenticator + version packet.
+         *
+         * This is the state the sender is in after the other side's public key has been received.
+         * Whatever remains of the public key is sent, plus garbage terminator, authentication
+         * packet, and version packet. When all of that is sent, the sender state becomes
+         * APP_READY. */
+        KEY_GARBTERM_GARBAUTH_VERSION,
+
+        /** Nothing (an application message to send can be provided).
+         *
+         * We're ready to start sending an application message at this point, but none are
+         * currently provided. Upon SetMessageToSend() the sender state becomes APP. */
+        APP_READY,
+
+        /** Application packet.
+         *
+         * There is an encrypted packet encoding an application message in the send buffer right now.
+         * When it is fully sent, the sender state becomes APP_READY. */
+        APP,
+    };
+
+    /** Cipher state. */
+    BIP324Cipher m_cipher;
+    /** Whether we are the initiator side. */
+    const bool m_initiating;
+    /** NodeId (for debug logging). */
+    const NodeId m_nodeid;
+
+    /** Lock for receiver-side fields. */
+    mutable Mutex m_recv_mutex ACQUIRED_BEFORE(m_send_mutex);
+    /** In {GARBAUTH, VERSION, APP}, the decrypted packet length, if m_recv_buffer.size() >=
+     *  BIP324Cipher::LENGTH_LEN. Unspecified otherwise. */
+    uint32_t m_recv_len GUARDED_BY(m_recv_mutex) {0};
+    /** Receive buffer; meaning is determined by m_recv_state. */
+    std::vector<uint8_t> m_recv_buffer GUARDED_BY(m_recv_mutex);
+    /** During GARBAUTH, the garbage received during GARB_GARBTERM. */
+    std::vector<uint8_t> m_recv_garbage GUARDED_BY(m_recv_mutex);
+    /** Buffer to put decrypted contents in, for converting to CNetMessage. */
+    std::vector<uint8_t> m_recv_decode_buffer GUARDED_BY(m_recv_mutex);
+    /** Deserialization type. */
+    const int m_recv_type;
+    /** Deserialization version number. */
+    const int m_recv_version;
+    /** Current receiver state. */
+    RecvState m_recv_state GUARDED_BY(m_recv_mutex);
+
+    /** Lock for sending-side fields. If both sending and receiving fields are accessed,
+     *  m_recv_mutex must be acquired before m_send_mutex. */
+    mutable Mutex m_send_mutex ACQUIRED_AFTER(m_recv_mutex);
+    /** The send buffer; meaning is determined by m_send_state. */
+    std::vector<uint8_t> m_send_buffer GUARDED_BY(m_send_mutex);
+    /** How many bytes from the send buffer have been sent so far. */
+    uint32_t m_send_pos GUARDED_BY(m_send_mutex) {0};
+    /** Type of the message being sent. */
+    std::string m_send_type GUARDED_BY(m_send_mutex);
+    /** Current sender state. */
+    SendState m_send_state GUARDED_BY(m_send_mutex);
+
+    /** Change the receive state. */
+    void SetReceiveState(RecvState recv_state) noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex);
+    /** Change the send state. */
+    void SetSendState(SendState send_state) noexcept EXCLUSIVE_LOCKS_REQUIRED(m_send_mutex);
+    /** Given a packet's contents, find the message type (if valid), and strip it from contents. */
+    static std::optional<std::string> GetMessageType(Span<const uint8_t>& contents) noexcept;
+    /** Determine how many received bytes can be processed in one go (not allowed in V1 state). */
+    size_t GetMaxBytesToProcess() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex);
+    /** Process m_recv_buffer in KEY state. */
+    void ProcessReceivedKey() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, !m_send_mutex);
+    /** Process m_recv_buffer in GARB_GARBTERM state. */
+    bool ProcessReceivedGarbage() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex);
+    /** Process m_recv_buffer in GARBAUTH/VERSION/APP state. */
+    bool ProcessReceivedPacket() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex);
+
+public:
+    static constexpr uint32_t MAX_GARBAGE_LEN = 4095;
+
+    /** Construct a V2 transport with securely generated random keys.
+     *
+     * @param[in] nodeid      the node's NodeId (only for debug log output).
+     * @param[in] initiating  whether we are the initiator side.
+     * @param[in] type_in     the serialization type of returned CNetMessages.
+     * @param[in] version_in  the serialization version of returned CNetMessages.
+     */
+    V2Transport(NodeId nodeid, bool initiating, int type_in, int version_in) noexcept;
+
+    /** Construct a V2 transport with specified keys (test use only). */
+    V2Transport(NodeId nodeid, bool initiating, int type_in, int version_in, const CKey& key, Span<const std::byte> ent32) noexcept;
+
+    // Receive side functions.
+    bool ReceivedMessageComplete() const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
+    bool ReceivedBytes(Span<const uint8_t>& msg_bytes) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex, !m_send_mutex);
+    CNetMessage GetReceivedMessage(std::chrono::microseconds time, bool& reject_message) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_recv_mutex);
+
+    // Send side functions.
     bool SetMessageToSend(CSerializedNetMsg& msg) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
     BytesToSend GetBytesToSend(bool have_next_message) const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
     void MarkBytesSent(size_t bytes_sent) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
