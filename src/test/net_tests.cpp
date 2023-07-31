@@ -1299,6 +1299,14 @@ public:
         SendPacket(contents);
     }
 
+    /** Test whether the transport's session ID matches the session ID we expect. */
+    void CompareSessionIDs() const
+    {
+        auto info = m_transport.GetInfo();
+        BOOST_CHECK(info.session_id);
+        BOOST_CHECK(uint256(MakeUCharSpan(m_cipher.GetSessionID())) == *info.session_id);
+    }
+
     /** Introduce a bit error in the data scheduled to be sent. */
     void Damage()
     {
@@ -1324,6 +1332,7 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         BOOST_CHECK(ret && ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
+        tester.CompareSessionIDs();
         auto msg_data_1 = g_insecure_rand_ctx.randbytes<uint8_t>(InsecureRandRange(100000));
         auto msg_data_2 = g_insecure_rand_ctx.randbytes<uint8_t>(InsecureRandRange(1000));
         tester.SendMessage(uint8_t(4), msg_data_1); // cmpctblock short id
@@ -1356,6 +1365,7 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         BOOST_CHECK(ret && ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
+        tester.CompareSessionIDs();
         auto msg_data_1 = g_insecure_rand_ctx.randbytes<uint8_t>(InsecureRandRange(100000));
         auto msg_data_2 = g_insecure_rand_ctx.randbytes<uint8_t>(InsecureRandRange(1000));
         tester.SendMessage(uint8_t(14), msg_data_1); // inv short id
@@ -1413,6 +1423,7 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         BOOST_CHECK(ret && ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
+        tester.CompareSessionIDs();
         for (unsigned d = 0; d < num_decoys_1; ++d) {
             auto decoy_data = g_insecure_rand_ctx.randbytes<uint8_t>(InsecureRandRange(1000));
             tester.SendPacket(/*content=*/decoy_data, /*aad=*/{}, /*ignore=*/true);
@@ -1487,6 +1498,7 @@ BOOST_AUTO_TEST_CASE(v2transport_test)
         tester.SendGarbageTermAuth();
         tester.SendVersion();
         ret = tester.Interact();
+        tester.CompareSessionIDs();
         BOOST_CHECK(ret && ret->empty());
         tester.ReceiveGarbage();
         tester.ReceiveVersion();
