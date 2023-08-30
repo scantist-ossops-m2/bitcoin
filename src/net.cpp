@@ -914,24 +914,28 @@ size_t V1Transport::GetSendMemoryUsage() const noexcept
 
 V2Transport::V2Transport(NodeId nodeid, bool initiating, int type_in, int version_in) noexcept :
     m_cipher{}, m_initiating{initiating}, m_nodeid{nodeid},
-    m_recv_type{type_in}, m_recv_version{version_in},
-    m_recv_state{RecvState::KEY},
-    m_send_state{SendState::KEY}
+    m_v1_fallback{nodeid, type_in, version_in}, m_recv_type{type_in}, m_recv_version{version_in},
+    m_recv_state{initiating ? RecvState::KEY : RecvState::KEY_MAYBE_V1},
+    m_send_state{initiating ? SendState::KEY : SendState::KEY_MAYBE_V1}
 {
     // Initialize the send buffer with ellswift pubkey.
     m_send_buffer.resize(EllSwiftPubKey::size());
     std::copy(std::begin(m_cipher.GetOurPubKey()), std::end(m_cipher.GetOurPubKey()), MakeWritableByteSpan(m_send_buffer).begin());
+    // Determine v1 prefix
+    std::copy(std::begin(Params().MessageStart()), std::end(Params().MessageStart()), m_v1_prefix.begin());
 }
 
 V2Transport::V2Transport(NodeId nodeid, bool initiating, int type_in, int version_in, const CKey& key, Span<const std::byte> ent32) noexcept :
     m_cipher{key, ent32}, m_initiating{initiating}, m_nodeid{nodeid},
-    m_recv_type{type_in}, m_recv_version{version_in},
-    m_recv_state{RecvState::KEY},
-    m_send_state{SendState::KEY}
+    m_v1_fallback{nodeid, type_in, version_in}, m_recv_type{type_in}, m_recv_version{version_in},
+    m_recv_state{initiating ? RecvState::KEY : RecvState::KEY_MAYBE_V1},
+    m_send_state{initiating ? SendState::KEY : SendState::KEY_MAYBE_V1}
 {
     // Initialize the send buffer with ellswift pubkey.
     m_send_buffer.resize(EllSwiftPubKey::size());
     std::copy(std::begin(m_cipher.GetOurPubKey()), std::end(m_cipher.GetOurPubKey()), MakeWritableByteSpan(m_send_buffer).begin());
+    // Determine v1 prefix
+    std::copy(std::begin(Params().MessageStart()), std::end(Params().MessageStart()), m_v1_prefix.begin());
 }
 
 void V2Transport::SetReceiveState(RecvState recv_state) noexcept
@@ -941,6 +945,9 @@ void V2Transport::SetReceiveState(RecvState recv_state) noexcept
     if (recv_state == m_recv_state) return;
     // Enforce allowed state transitions.
     switch (m_recv_state) {
+    case RecvState::KEY_MAYBE_V1:
+        Assume(recv_state == RecvState::KEY || recv_state == RecvState::V1);
+        break;
     case RecvState::KEY:
         Assume(recv_state == RecvState::GARB_GARBTERM);
         break;
@@ -959,6 +966,9 @@ void V2Transport::SetReceiveState(RecvState recv_state) noexcept
     case RecvState::APP_READY:
         Assume(recv_state == RecvState::APP);
         break;
+    case RecvState::V1:
+        Assume(false); // V1 state cannot be left
+        break;
     }
     // Change state.
     m_recv_state = recv_state;
@@ -971,6 +981,9 @@ void V2Transport::SetSendState(SendState send_state) noexcept
     if (send_state == m_send_state) return;
     // Enforce allowed state transitions.
     switch (m_send_state) {
+    case SendState::KEY_MAYBE_V1:
+        Assume(send_state == SendState::KEY || send_state == SendState::V1);
+        break;
     case SendState::KEY:
         Assume(send_state == SendState::KEY_GARBTERM_GARBAUTH_VERSION);
         break;
@@ -983,6 +996,9 @@ void V2Transport::SetSendState(SendState send_state) noexcept
     case SendState::APP:
         Assume(send_state == SendState::APP_READY);
         break;
+    case SendState::V1:
+        Assume(false); // V1 state cannot be left
+        break;
     }
     // Change state.
     m_send_state = send_state;
@@ -992,6 +1008,8 @@ bool V2Transport::ReceivedMessageComplete() const noexcept
 {
     AssertLockNotHeld(m_recv_mutex);
     LOCK(m_recv_mutex);
+    if (m_recv_state == RecvState::V1) return m_v1_fallback.ReceivedMessageComplete();
+
     return m_recv_state == RecvState::APP_READY;
 }
 
@@ -999,6 +1017,15 @@ size_t V2Transport::GetMaxBytesToProcess() noexcept
 {
     AssertLockHeld(m_recv_mutex);
     switch (m_recv_state) {
+    case RecvState::KEY_MAYBE_V1:
+        // During the KEY_MAYBE_V1 state we do not allow more than the length of v1 prefix into the
+        // receive buffer.
+        Assume(m_recv_buffer.size() <= m_v1_prefix.size());
+        // As long as we're not sure if this is a v1 or v2 connection, don't receive more than what
+        // is strictly necessary to distinguish the two (12 bytes). If we permitted more than
+        // the v1 header size (24 bytes), we may not be able to feed the already-received bytes
+        // back into the m_v1_fallback V1 transport.
+        return m_v1_prefix.size() - m_recv_buffer.size();
     case RecvState::KEY:
         // During the KEY state, we only allow the 64-byte key into the receive buffer.
         Assume(m_recv_buffer.size() <= EllSwiftPubKey::size());
@@ -1026,9 +1053,44 @@ size_t V2Transport::GetMaxBytesToProcess() noexcept
     case RecvState::APP_READY:
         // No bytes can be processed until GetMessage() is called.
         return 0;
+    case RecvState::V1:
+        // Not allowed (must be dealt with by the caller).
+        Assume(false);
+        return 0;
     }
     Assume(false); // unreachable
     return 0;
+}
+
+void V2Transport::ProcessReceivedMaybeV1() noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    AssertLockNotHeld(m_send_mutex);
+    Assume(m_recv_state == RecvState::KEY_MAYBE_V1);
+    // We still have to determine if this is a v1 or v2 connection. The bytes being received could
+    // be the beginning of either a v1 packet (network magic + "version\x00"), or of a v2 public key.
+    Assume(m_recv_buffer.size() <= m_v1_prefix.size());
+    if (!std::equal(m_recv_buffer.begin(), m_recv_buffer.end(), m_v1_prefix.begin())) {
+        // Mismatch with v1 prefix, so we can assume a v2 connection.
+        SetReceiveState(RecvState::KEY); // Convert to KEY state, leaving received bytes around.
+        // Transition the sender to KEY state (if not already).
+        LOCK(m_send_mutex);
+        SetSendState(SendState::KEY);
+    } else if (m_recv_buffer.size() == m_v1_prefix.size()) {
+        // Full match with the v1 prefix, so fall back to v1 behavior.
+        LOCK(m_send_mutex);
+        Span<const uint8_t> feedback{m_recv_buffer};
+        // Feed already received bytes to v1 transport. It should always accept these, because it's
+        // less than the size of a v1 header, and these are the first bytes fed to m_v1_fallback.
+        bool ret = m_v1_fallback.ReceivedBytes(feedback);
+        Assume(feedback.empty());
+        Assume(ret);
+        SetReceiveState(RecvState::V1);
+        SetSendState(SendState::V1);
+        // Reset v2 transport buffers to save memory.
+        m_recv_buffer = {};
+        m_send_buffer = {};
+    }
 }
 
 void V2Transport::ProcessReceivedKey() noexcept
@@ -1170,6 +1232,8 @@ bool V2Transport::ReceivedBytes(Span<const uint8_t>& msg_bytes) noexcept
 {
     AssertLockNotHeld(m_recv_mutex);
     LOCK(m_recv_mutex);
+    if (m_recv_state == RecvState::V1) return m_v1_fallback.ReceivedBytes(msg_bytes);
+
     while (!msg_bytes.empty()) {
         // Decide how many bytes to copy from msg_bytes to m_recv_buffer.
         size_t max_read = GetMaxBytesToProcess();
@@ -1181,6 +1245,11 @@ bool V2Transport::ReceivedBytes(Span<const uint8_t>& msg_bytes) noexcept
 
         // Process data in the buffer.
         switch (m_recv_state) {
+        case RecvState::KEY_MAYBE_V1:
+            ProcessReceivedMaybeV1();
+            if (m_recv_state == RecvState::V1) return true;
+            break;
+
         case RecvState::KEY:
             ProcessReceivedKey();
             break;
@@ -1197,6 +1266,11 @@ bool V2Transport::ReceivedBytes(Span<const uint8_t>& msg_bytes) noexcept
 
         case RecvState::APP_READY:
             return true;
+
+        case RecvState::V1:
+            // We should have bailed out before.
+            Assume(false);
+            break;
         }
     }
 
@@ -1238,6 +1312,8 @@ CNetMessage V2Transport::GetReceivedMessage(std::chrono::microseconds time, bool
 {
     AssertLockNotHeld(m_recv_mutex);
     LOCK(m_recv_mutex);
+    if (m_recv_state == RecvState::V1) return m_v1_fallback.GetReceivedMessage(time, reject_message);
+
     Assume(m_recv_state == RecvState::APP_READY);
     Span<const uint8_t> contents{m_recv_decode_buffer};
     auto msg_type = GetMessageType(contents);
@@ -1266,6 +1342,8 @@ bool V2Transport::SetMessageToSend(CSerializedNetMsg& msg) noexcept
 {
     AssertLockNotHeld(m_send_mutex);
     LOCK(m_send_mutex);
+    if (m_send_state == SendState::V1) return m_v1_fallback.SetMessageToSend(msg);
+
     if (m_send_state != SendState::APP_READY) return false;
     // Construct contents (encoding message type + payload).
     // Initialize with zeroes, and then write the message type string starting at offset 1.
@@ -1288,6 +1366,11 @@ Transport::BytesToSend V2Transport::GetBytesToSend(bool have_next_message) const
 {
     AssertLockNotHeld(m_send_mutex);
     LOCK(m_send_mutex);
+    if (m_send_state == SendState::V1) return m_v1_fallback.GetBytesToSend(have_next_message);
+
+    // We do not send anything in KEY_MAYBE_V1 state (as we don't know if the peer is v1 or v2),
+    // despite there being data in the send buffer in that state.
+    if (m_send_state == SendState::KEY_MAYBE_V1) return {{}, false, m_send_type};
     Assume(m_send_pos <= m_send_buffer.size());
     return {
         Span{m_send_buffer}.subspan(m_send_pos),
@@ -1306,6 +1389,8 @@ void V2Transport::MarkBytesSent(size_t bytes_sent) noexcept
 {
     AssertLockNotHeld(m_send_mutex);
     LOCK(m_send_mutex);
+    if (m_send_state == SendState::V1) return m_v1_fallback.MarkBytesSent(bytes_sent);
+
     m_send_pos += bytes_sent;
     Assume(m_send_pos <= m_send_buffer.size());
     if (m_send_state == SendState::KEY_GARBTERM_GARBAUTH_VERSION || m_send_state == SendState::APP) {
@@ -1321,6 +1406,8 @@ size_t V2Transport::GetSendMemoryUsage() const noexcept
 {
     AssertLockNotHeld(m_send_mutex);
     LOCK(m_send_mutex);
+    if (m_send_state == SendState::V1) return m_v1_fallback.GetSendMemoryUsage();
+
     return sizeof(m_send_buffer) + memusage::DynamicUsage(m_send_buffer);
 }
 
