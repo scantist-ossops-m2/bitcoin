@@ -562,17 +562,15 @@ private:
          *
          * This is the initial state for initiators. The public key plus garbage are sent out. When
          * the receiver receives the other side's public key and transitions to GARB_GARBTERM, the
-         * sender state becomes KEY_GARB_GARBTERM_GARBAUTH_VERSION. The key and garbage are left in
-         * the send buffer when this happens, because they may not have been fully sent out yet. */
+         * sender state becomes GARBTERM_GARBAUTH_VERSION. */
         KEY_GARB,
 
-        /** Public key + garbage + garbage terminator + garbage authenticator + version packet.
+        /** Garbage terminator + garbage authenticator + version packet.
          *
          * This is the state the sender is in after the other side's public key has been received.
-         * Whatever remains of the public key and garbage are sent, plus garbage terminator,
-         * authentication packet, and version packet. When all of that is sent, the sender state
-         * becomes APP_READY. */
-        KEY_GARB_GARBTERM_GARBAUTH_VERSION,
+         * The garbage terminator, authentication packet, and version packet are sent. When all of
+         * that is done, the sender state becomes APP_READY. */
+        GARBTERM_GARBAUTH_VERSION,
 
         /** Nothing (an application message to send can be provided).
          *
@@ -639,6 +637,8 @@ private:
     void SetReceiveState(RecvState recv_state) noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex);
     /** Change the send state. */
     void SetSendState(SendState send_state) noexcept EXCLUSIVE_LOCKS_REQUIRED(m_send_mutex);
+    /** When our key is sent, and the other key is received, switch to GARBTERM_GARBAUTH_VERSION. */
+    void ConsiderBothKeysExchanged() noexcept EXCLUSIVE_LOCKS_REQUIRED(m_recv_mutex, m_send_mutex);
     /** Given a packet's contents, find the message type (if valid), and strip it from contents. */
     static std::optional<std::string> GetMessageType(Span<const uint8_t>& contents) noexcept;
     /** Determine how many received bytes can be processed in one go (not allowed in V1 state). */
@@ -674,8 +674,8 @@ public:
 
     // Send side functions.
     bool SetMessageToSend(CSerializedNetMsg& msg) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
-    BytesToSend GetBytesToSend(bool have_next_message) const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
-    void MarkBytesSent(size_t bytes_sent) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
+    BytesToSend GetBytesToSend(bool have_next_message) const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex, !m_recv_mutex);
+    void MarkBytesSent(size_t bytes_sent) noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex, !m_recv_mutex);
     size_t GetSendMemoryUsage() const noexcept override EXCLUSIVE_LOCKS_REQUIRED(!m_send_mutex);
 
     // Miscellaneous functions.

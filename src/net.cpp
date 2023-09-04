@@ -1069,9 +1069,9 @@ void V2Transport::SetSendState(SendState send_state) noexcept
         Assume(send_state == SendState::KEY_GARB || send_state == SendState::V1);
         break;
     case SendState::KEY_GARB:
-        Assume(send_state == SendState::KEY_GARB_GARBTERM_GARBAUTH_VERSION);
+        Assume(send_state == SendState::GARBTERM_GARBAUTH_VERSION);
         break;
-    case SendState::KEY_GARB_GARBTERM_GARBAUTH_VERSION:
+    case SendState::GARBTERM_GARBAUTH_VERSION:
         Assume(send_state == SendState::APP_READY);
         break;
     case SendState::APP_READY:
@@ -1177,6 +1177,44 @@ void V2Transport::ProcessReceivedMaybeV1() noexcept
     }
 }
 
+void V2Transport::ConsiderBothKeysExchanged() noexcept
+{
+    AssertLockHeld(m_recv_mutex);
+    AssertLockHeld(m_send_mutex);
+    if (m_recv_state != RecvState::KEY_MAYBE_V1 && m_recv_state != RecvState::KEY &&
+        m_send_state == SendState::KEY_GARB && m_send_pos == m_send_buffer.size()) {
+
+        // Switch sender state to GARBTERM_GARBAUTH_VERSION.
+        SetSendState(SendState::GARBTERM_GARBAUTH_VERSION);
+        // Compute the garbage terminator (using the garbage data which is stinn in the send buffer.
+        size_t garbage_len = m_send_buffer.size() - EllSwiftPubKey::size();
+        std::array<uint8_t, BIP324Cipher::EXPANSION> garbauth;
+        m_cipher.Encrypt(
+            {},
+            MakeByteSpan(m_send_buffer).subspan(EllSwiftPubKey::size(), garbage_len),
+            false,
+            MakeWritableByteSpan(garbauth));
+        // Wipe the send buffer.
+        m_send_buffer.clear();
+        m_send_pos = 0;
+        // Put the garbage terminator in the send buffer.
+        m_send_buffer.resize(BIP324Cipher::GARBAGE_TERMINATOR_LEN);
+        std::copy(m_cipher.GetSendGarbageTerminator().begin(),
+                  m_cipher.GetSendGarbageTerminator().end(),
+                  MakeWritableByteSpan(m_send_buffer).begin());
+        // Put garbage authentication packet in the send buffer.
+        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::EXPANSION);
+        std::copy(std::begin(garbauth), std::end(garbauth), m_send_buffer.end() - BIP324Cipher::EXPANSION);
+        // Construct version packet in the send buffer.
+        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::EXPANSION + VERSION_CONTENTS.size());
+        m_cipher.Encrypt(
+            VERSION_CONTENTS,
+            {},
+            false,
+            MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::EXPANSION + VERSION_CONTENTS.size()));
+    }
+}
+
 void V2Transport::ProcessReceivedKey() noexcept
 {
     AssertLockHeld(m_recv_mutex);
@@ -1194,29 +1232,8 @@ void V2Transport::ProcessReceivedKey() noexcept
         SetReceiveState(RecvState::GARB_GARBTERM);
         m_recv_buffer.clear();
 
-        // Switch sender state to KEY_GARB_GARBTERM_GARBAUTH_VERSION.
-        SetSendState(SendState::KEY_GARB_GARBTERM_GARBAUTH_VERSION);
-        // Append the garbage terminator to the send buffer.
-        size_t garbage_len = m_send_buffer.size() - EllSwiftPubKey::size();
-        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::GARBAGE_TERMINATOR_LEN);
-        std::copy(m_cipher.GetSendGarbageTerminator().begin(),
-                  m_cipher.GetSendGarbageTerminator().end(),
-                  MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::GARBAGE_TERMINATOR_LEN).begin());
-        // Construct garbage authentication packet in the send buffer (using the garbage data which
-        // already there).
-        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::EXPANSION);
-        m_cipher.Encrypt(
-            {},
-            MakeByteSpan(m_send_buffer).subspan(EllSwiftPubKey::size(), garbage_len),
-            false,
-            MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::EXPANSION));
-        // Construct version packet in the send buffer.
-        m_send_buffer.resize(m_send_buffer.size() + BIP324Cipher::EXPANSION + VERSION_CONTENTS.size());
-        m_cipher.Encrypt(
-            VERSION_CONTENTS,
-            {},
-            false,
-            MakeWritableByteSpan(m_send_buffer).last(BIP324Cipher::EXPANSION + VERSION_CONTENTS.size()));
+        // If our key has been fully sent, change the send state.
+        ConsiderBothKeysExchanged();
     }
 }
 
@@ -1486,7 +1503,9 @@ bool V2Transport::SetMessageToSend(CSerializedNetMsg& msg) noexcept
 
 Transport::BytesToSend V2Transport::GetBytesToSend(bool have_next_message) const noexcept
 {
+    AssertLockNotHeld(m_recv_mutex);
     AssertLockNotHeld(m_send_mutex);
+    LOCK(m_recv_mutex);
     LOCK(m_send_mutex);
     if (m_send_state == SendState::V1) return m_v1_fallback.GetBytesToSend(have_next_message);
 
@@ -1498,30 +1517,35 @@ Transport::BytesToSend V2Transport::GetBytesToSend(bool have_next_message) const
         Span{m_send_buffer}.subspan(m_send_pos),
         // We only have more to send after the current m_send_buffer if there is a (next)
         // message to be sent, and we're in one of the APP states (during which those can
-        // be sent), or in the KEY_GARB_GARBTERM_GARBAUTH_VERSION (after which we automatically
+        // be sent), or in the GARBTERM_GARBAUTH_VERSION (after which we automatically
         // transition to the APP_READY state).
-        have_next_message && (m_send_state == SendState::APP ||
+        // In KEY_GARB state, also when we have already received the other side's key.
+        (have_next_message && (m_send_state == SendState::APP ||
                               m_send_state == SendState::APP_READY ||
-                              m_send_state == SendState::KEY_GARB_GARBTERM_GARBAUTH_VERSION),
+                              m_send_state == SendState::GARBTERM_GARBAUTH_VERSION)) ||
+            (m_send_state == SendState::KEY_GARB && m_recv_state != RecvState::KEY_MAYBE_V1 && m_recv_state != RecvState::KEY),
         m_send_type
     };
 }
 
 void V2Transport::MarkBytesSent(size_t bytes_sent) noexcept
 {
+    AssertLockNotHeld(m_recv_mutex);
     AssertLockNotHeld(m_send_mutex);
+    LOCK(m_recv_mutex);
     LOCK(m_send_mutex);
     if (m_send_state == SendState::V1) return m_v1_fallback.MarkBytesSent(bytes_sent);
 
     m_send_pos += bytes_sent;
     Assume(m_send_pos <= m_send_buffer.size());
+    ConsiderBothKeysExchanged();
     if (m_send_state == SendState::KEY_GARB_MAYBE_V1 || m_send_state == SendState::KEY_GARB ||
-        m_send_state == SendState::KEY_GARB_GARBTERM_GARBAUTH_VERSION) {
+        m_send_state == SendState::GARBTERM_GARBAUTH_VERSION) {
         if (m_send_pos >= CMessageHeader::HEADER_SIZE) {
             m_sent_v1_header_worth = true;
         }
     }
-    if (m_send_state == SendState::KEY_GARB_GARBTERM_GARBAUTH_VERSION || m_send_state == SendState::APP) {
+    if (m_send_state == SendState::GARBTERM_GARBAUTH_VERSION || m_send_state == SendState::APP) {
         if (m_send_pos == m_send_buffer.size()) {
             SetSendState(SendState::APP_READY);
             m_send_pos = 0;
