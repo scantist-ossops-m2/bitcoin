@@ -277,13 +277,13 @@ def optimize(when):
     # Compute approximation for {bufsize/period}, using a formula for a simplified problem.
     approx_ratio = lambert_w(log(4) * memory_scale / ATTACK_HEADERS**2) / log(4)
     # Use those for a first attempt.
-    print("Searching configurations:")
+#    print("Searching configurations:")
     period = int(sqrt(memory_scale / approx_ratio) + 0.5)
     bufsize = find_bufsize(period, ATTACK_HEADERS, when)
     mem = memory_usage(period, bufsize, when)
     best = (period, bufsize, mem)
     maps = [(period, bufsize), (MINCHAINWORK_HEADERS + 1, None)]
-    print(f"- Initial: period={period}, buffer={bufsize}, mem={mem[0] / 8192:.3f} KiB")
+#    print(f"- Initial: period={period}, buffer={bufsize}, mem={mem[0] / 8192:.3f} KiB")
 
     # Consider all period values between 1 and MINCHAINWORK_HEADERS, except the one just tried.
     periods = [iv for iv in range(1, MINCHAINWORK_HEADERS + 1) if iv != period]
@@ -314,7 +314,7 @@ def optimize(when):
                 # best.
                 periods = [p for p in periods if (p < best[0]) == (period < best[0])]
             best = (period, bufsize, mem)
-            print(f"- New best: period={period}, buffer={bufsize}, mem={mem[0] / 8192:.3f} KiB")
+#            print(f"- New best: period={period}, buffer={bufsize}, mem={mem[0] / 8192:.3f} KiB")
         else:
             # The (period, bufsize) configuration we found is worse than what we already had.
             if ASSUME_CONVEX:
@@ -354,4 +354,38 @@ def analyze(when):
     print(f"  (where each attack costs {attack_volume / 8388608:.3f} MiB bandwidth)")
 
 
-analyze(TIME)
+#analyze(TIME)
+
+AHEAD = timedelta(days=365*3)
+TIME = datetime(2023, 5, 25)
+Q = []
+for i in range(6):
+    period, bufsize = optimize(TIME + AHEAD)
+    Q.append((TIME, MINCHAINWORK_HEADERS, period, bufsize))
+    TIME += timedelta(weeks=50)
+    MINCHAINWORK_HEADERS += 2016*25
+
+#Q = [(600, 14308), (615, 14691), (631, 15105), (645, 15471), (660, 15864), (674, 16231), (688, 16598), (701, 16938), (714, 17279), (727, 17622), (740, 17965), (753, 18307), (765, 18624), (777, 18944), (789, 19264), (800, 19557), (812, 19877), (823, 20170), (834, 20463), (845, 20757)]
+
+for i, (tim, mcwh, period, bufsize) in enumerate(Q):
+    MINCHAINWORK_HEADERS = mcwh
+    TIME = tim
+    print(f"$data{i} << EOD # period={period} bufsize={bufsize} time={tim}")
+    for j in range((12 - i) * 350):
+        t = tim + timedelta(days=j)
+        m, _, _ = memory_usage(period, bufsize, t)
+        print(f"{t.timestamp()} {m / 2**23} # {t}")
+    print("EOD")
+
+print("set xdata time")
+print("set xlabel \"Date\"")
+print("set ylabel \"Max memory usage (MiB)\"")
+print("set timefmt \"%s\"")
+print("set terminal pngcairo enhanced size 1280,800 font \"Verdana,12\"")
+#print("set xtics 60. * 60. * 24. * 14 * 25")
+print("set xtics rotate by -45")
+print("set output \"headerssync.png\"")
+print("set key top left")
+print("set grid x y")
+#print("set format x \"%b %d\"")
+print("plot " + ", ".join(f"\"$data{i}\" using 1:2 with line title \"Configured on {tim}: period {period}, bufsize {bufsize}\"" for i, (tim, mcwh, period, bufsize) in enumerate(Q)))
