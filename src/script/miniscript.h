@@ -1430,8 +1430,7 @@ public:
         return true;
     }
 
-    /** Return the maximum number of stack elements needed to satisfy this script non-malleably.
-     * This does not account for the P2WSH script push. */
+    /** Return the maximum number of stack elements needed to satisfy this script non-malleably. */
     std::optional<uint32_t> GetStackSize() const {
         if (!ss.sat.size.valid) return {};
         return ss.sat.size.value;
