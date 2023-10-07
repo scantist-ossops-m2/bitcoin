@@ -344,6 +344,47 @@ struct Ops {
     Ops(uint32_t in_count, MaxInt<uint32_t> in_sat, MaxInt<uint32_t> in_dsat) : count(in_count), sat(in_sat), dsat(in_dsat) {};
 };
 
+/** A data structure to help the calculation of stack size limits.
+ *
+ * Conceptually, every SatInfo object corresponds to a (possibly empty) set of script execution
+ * traces (sequences of opcodes).
+ * - SatInfo{} corresponds to the empty set.
+ * - SatInfo{n, e} corresponds to a single trace whose net effect is removing n elements from the
+ *   stack (may be negative for a net increase), and reaches a maximum of e stack elements more
+ *   than it ends with.
+ * - operator| is the union operation: (a | b) corresponds to the union of the traces in a and the
+ *   traces in b.
+ * - operator+ is the concatenation operator: (a + b) corresponds to the set of traces formed by
+ *   concatenating any trace in a with any trace in b.
+ *
+ * Its fields are:
+ * - valid is true if the set is non-empty.
+ * - netdiff (if valid) is the largest difference between stack size at the beginning and at the
+ *   end of the script across all traces in the set
+ * - exec (if valid) is the largest difference between stack size anywhere during execution and at
+ *   the end of the script, across all traces in the set (note that this is not necessarily due
+ *   to the same trace as the one that resulted in the value for netdiff).
+ *
+ * This allows us to build up stack size limits for any script efficiently, by starting from the
+ * individual opcodes miniscripts correspond to, using concatenation to construct scripts, and
+ * using the union operation to choose between execution branches. Since any script satisfaction
+ * ends with a single stack element, we know that for a full script:
+ * - netdiff+1 is the maximal initial stack size (relevant for P2WSH stack limits).
+ * - exec+1 is the maximal stack size reached during execution (relevant for P2TR stack limits).
+ *
+ * Mathematically, SatInfo forms a semiring:
+ * - operator| is the semiring addition operator, with identity SatInfo{}, and which is commutative
+ *   and associative.
+ * - operator+ is the semiring multiplication operator, with identity SatInfo{0}, and which is
+ *   associative.
+ * - operator+ is distributive over operator|, so (a + (b | c)) = (a+b | a+c). This means we do not
+ *   need to actually materialize all possible full execution traces over the whole script (which
+ *   may be exponential in the length of the script); instead we can use the union operation at the
+ *   individual subexpression level, and concatenate the result with subexpressions before and
+ *   after it.
+ * - It is not a commutative semiring, because a+b can differ from b+a. For example, "OP_1 OP_DROP"
+ *   has exec=1, while "OP_DROP OP_1" has exec=0.
+ */
 struct SatInfo {
     //! Whether a canonical satisfaction/dissatisfaction is possible at all.
     const bool valid;
@@ -352,44 +393,57 @@ struct SatInfo {
     //! Mow much higher the stack size can be during execution compared to at the end.
     const int32_t exec;
 
-    constexpr SatInfo(int32_t in_netdiff, int32_t in_exec) noexcept
-        : valid(true), netdiff(in_netdiff), exec(in_exec) {}
-
+    /** Empty script set. */
     constexpr SatInfo() noexcept : valid(false), netdiff(0), exec(0) {}
 
-    /** Script concatenation. */
-    constexpr friend SatInfo operator+(const SatInfo& a, const SatInfo& b) noexcept
-    {
-        if (!a.valid || !b.valid) return {};
-        return {a.netdiff + b.netdiff, b.exec > b.netdiff + a.exec ? b.exec : b.netdiff + a.exec};
-    }
+    /** Script set with a single script in it, with specified netdiff and exec. */
+    constexpr SatInfo(int32_t in_netdiff, int32_t in_exec) noexcept :
+        valid{true}, netdiff{in_netdiff}, exec{in_exec} {}
 
-    /** Branching. */
+    /** Script set union. */
     constexpr friend SatInfo operator|(const SatInfo& a, const SatInfo& b) noexcept
     {
+        // Union with an empty set is itself.
         if (!a.valid) return b;
         if (!b.valid) return a;
-        return {a.netdiff > b.netdiff ? a.netdiff : b.netdiff, a.exec > b.exec ? a.exec : b.exec};
+        // Otherwise the netdiff and exec of the union is the maximum of the individual values.
+        return {std::max(a.netdiff, b.netdiff), std::max(a.exec, b.exec)};
     }
-};
 
-constexpr SatInfo SI_PUSH{-1, 0}; //!< Any push opcode
-constexpr SatInfo SI_DUP{-1, 0}; //!< OP_DUP
-constexpr SatInfo SI_HASH{0, 0}; //!< OP_HASH160, OP_HASH256, OP_SHA256, OP_RIPEMD160
-constexpr SatInfo SI_EQUALVERIFY{2, 2}; //!< OP_EQUALVERIFY
-constexpr SatInfo SI_CHECKSIG{1, 1}; //!< OP_CHECKSIG
-constexpr SatInfo SI_CHECKTIMEVERIFY{0, 0}; //!< OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY
-constexpr SatInfo SI_SIZE{-1, 0}; //!< OP_SIZE
-constexpr SatInfo SI_EQUAL{1, 1}; //!< OP_EQUAL
-constexpr SatInfo SI_IF{1, 1}; //!< OP_IF, OP_NOTIF
-constexpr SatInfo SI_BOOLOP{1, 1}; //!< OP_BOOLAND, OP_BOOLOR
-constexpr SatInfo SI_STACKMOVE{0, 0}; //!< OP_SWAP, OP_TOALTSTACK, OP_FROMALTSTACK
-constexpr SatInfo SI_IFDUP_TRUE{-1, 0}; //!< OP_IFDUP with true input
-constexpr SatInfo SI_IFDUP_FALSE{0, 0}; //!< OP_IFDUP with false input
-constexpr SatInfo SI_ZERONOTEQUAL{0, 0}; //!< OP_0NOTEQUAL
-constexpr SatInfo SI_VERIFY{1, 1}; //!< OP_VERIFY
-constexpr SatInfo SI_ADD{1, 1}; //!< OP_ADD
-constexpr SatInfo SI_NONE{0, 0}; //!< empty script
+    /** Script set concatenation. */
+    constexpr friend SatInfo operator+(const SatInfo& a, const SatInfo& b) noexcept
+    {
+        // Concatenation with an empty set yields an empty set.
+        if (!a.valid || !b.valid) return {};
+        // Otherwise, the maximum stack size difference for the combined scripts is the sum of the
+        // netdiffs, and the maximum stack size difference anywhere is either b.exec (if the
+        // maximum occurred in b) or b.netdiff+a.exec (if the maximum occurred in a).
+        return {a.netdiff + b.netdiff, std::max(b.exec, b.netdiff + a.exec)};
+    }
+
+    /** The empty script. */
+    static constexpr SatInfo Empty() noexcept { return {0, 0}; }
+    /** A script consisting of a single push opcode. */
+    static constexpr SatInfo Push() noexcept { return {-1, 0}; }
+    /** A script consisting of a single hash opcode. */
+    static constexpr SatInfo Hash() noexcept { return {0, 0}; }
+    /** A script consisting of just a repurposed nop (OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY). */
+    static constexpr SatInfo Nop() noexcept { return {0, 0}; }
+    /** A script consisting of just OP_IF or OP_NOTIF. Note that OP_ELSE and OP_ENDIF have no stack effect. */
+    static constexpr SatInfo If() noexcept { return {1, 1}; }
+    /** A script consisting of just a binary operator (OP_BOOLAND, OP_BOOLOR, OP_ADD). */
+    static constexpr SatInfo BinaryOp() noexcept { return {1, 1}; }
+
+    // Scripts for specific individual opcodes.
+    static constexpr SatInfo OP_DUP() noexcept { return {-1, 0}; }
+    static constexpr SatInfo OP_IFDUP(bool nonzero) noexcept { return {nonzero ? -1 : 0, 0}; }
+    static constexpr SatInfo OP_EQUALVERIFY() noexcept { return {2, 2}; }
+    static constexpr SatInfo OP_EQUAL() noexcept { return {1, 1}; }
+    static constexpr SatInfo OP_SIZE() noexcept { return {-1, 0}; }
+    static constexpr SatInfo OP_CHECKSIG() noexcept { return {1, 1}; }
+    static constexpr SatInfo OP_0NOTEQUAL() noexcept { return {0, 0}; }
+    static constexpr SatInfo OP_VERIFY() noexcept { return {1, 1}; }
+};
 
 struct StackSize {
     const SatInfo sat, dsat;
@@ -909,21 +963,27 @@ private:
     internal::StackSize CalcStackSize() const {
         using namespace internal;
         switch (fragment) {
-            case Fragment::JUST_0: return {{}, SI_PUSH};
-            case Fragment::JUST_1: return {SI_PUSH, {}};
+            case Fragment::JUST_0: return {{}, SatInfo::Push()};
+            case Fragment::JUST_1: return {SatInfo::Push(), {}};
             case Fragment::OLDER:
-            case Fragment::AFTER: return {SI_PUSH + SI_CHECKTIMEVERIFY, {}};
-            case Fragment::PK_K: return {SI_PUSH};
-            case Fragment::PK_H: return {SI_DUP + SI_HASH + SI_PUSH + SI_EQUALVERIFY};
+            case Fragment::AFTER: return {SatInfo::Push() + SatInfo::Nop(), {}};
+            case Fragment::PK_K: return {SatInfo::Push()};
+            case Fragment::PK_H: return {SatInfo::OP_DUP() + SatInfo::Hash() + SatInfo::Push() + SatInfo::OP_EQUALVERIFY()};
             case Fragment::SHA256:
             case Fragment::RIPEMD160:
             case Fragment::HASH256:
-            case Fragment::HASH160: return {SI_SIZE + SI_PUSH + SI_EQUALVERIFY + SI_HASH + SI_PUSH + SI_EQUAL, {}};
+            case Fragment::HASH160: return {
+                SatInfo::OP_SIZE() + SatInfo::Push() + SatInfo::OP_EQUALVERIFY() + SatInfo::Hash() + SatInfo::Push() + SatInfo::OP_EQUAL(),
+                {}
+            };
             case Fragment::ANDOR: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
                 const auto& z{subs[2]->ss};
-                return {(x.sat + SI_IF + y.sat) | (x.dsat + SI_IF + z.sat), x.dsat + SI_IF + z.dsat};
+                return {
+                    (x.sat + SatInfo::If() + y.sat) | (x.dsat + SatInfo::If() + z.sat),
+                    x.dsat + SatInfo::If() + z.dsat
+                };
             }
             case Fragment::AND_V: {
                 const auto& x{subs[0]->ss};
@@ -933,48 +993,83 @@ private:
             case Fragment::AND_B: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
-                return {x.sat + y.sat + SI_BOOLOP, x.dsat + y.dsat + SI_BOOLOP};
+                return {x.sat + y.sat + SatInfo::BinaryOp(), x.dsat + y.dsat + SatInfo::BinaryOp()};
             }
             case Fragment::OR_B: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
-                return {((x.sat + y.dsat) | (x.dsat + y.sat)) + SI_BOOLOP, x.dsat + y.dsat + SI_BOOLOP};
+                return {
+                    ((x.sat + y.dsat) | (x.dsat + y.sat)) + SatInfo::BinaryOp(),
+                    x.dsat + y.dsat + SatInfo::BinaryOp()
+                };
             }
             case Fragment::OR_C: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
-                return {(x.sat + SI_IF) | (x.dsat + SI_IF + y.sat), {}};
+                return {(x.sat + SatInfo::If()) | (x.dsat + SatInfo::If() + y.sat), {}};
             }
             case Fragment::OR_D: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
-                return {(x.sat + SI_IFDUP_TRUE + SI_IF) | (x.dsat + SI_IFDUP_FALSE + SI_IF + y.sat), x.dsat + SI_IFDUP_FALSE + SI_IF + y.dsat};
+                return {
+                    (x.sat + SatInfo::OP_IFDUP(true) + SatInfo::If()) | (x.dsat + SatInfo::OP_IFDUP(false) + SatInfo::If() + y.sat),
+                    x.dsat + SatInfo::OP_IFDUP(false) + SatInfo::If() + y.dsat
+                };
             }
             case Fragment::OR_I: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
-                return {SI_IF + (x.sat | y.sat), SI_IF + (x.dsat | y.dsat)};
+                return {SatInfo::If() + (x.sat | y.sat), SatInfo::If() + (x.dsat | y.dsat)};
             }
+            // multi(k, key1, key2, ..., key_n) starts off with k+1 stack elements (a 0, plus k
+            // signatures), then reaches n+k+3 stack elements after pushing the n keys, plus k and
+            // n itself, and ends with 1 stack element (success or failure). Thus, it net removes
+            // k elements (from k+1 to 1), while reaching k+n+2 more than it ends with.
             case Fragment::MULTI: return {SatInfo(k, k + keys.size() + 2)};
+            // multi_a(k, key1, key2, ..., key_n) starts off with n stack elements (the
+            // signatures), reaches 1 more (after the first key push), and ends with 1. This it net
+            // removes n-1 elements (from n to 1) while reaching n more than it ends with.
             case Fragment::MULTI_A: return {SatInfo(keys.size() - 1, keys.size())};
-            case Fragment::WRAP_A: return {SI_STACKMOVE + subs[0]->ss.sat + SI_STACKMOVE, SI_STACKMOVE + subs[0]->ss.dsat + SI_STACKMOVE};
-            case Fragment::WRAP_N: return {subs[0]->ss.sat + SI_ZERONOTEQUAL, subs[0]->ss.dsat + SI_ZERONOTEQUAL};
-            case Fragment::WRAP_S: return {SI_STACKMOVE + subs[0]->ss.sat, SI_STACKMOVE + subs[0]->ss.dsat};
-            case Fragment::WRAP_C: return {subs[0]->ss.sat + SI_CHECKSIG, subs[0]->ss.dsat + SI_CHECKSIG};
-            case Fragment::WRAP_D: return {SI_DUP + SI_IF + subs[0]->ss.sat, SI_DUP + SI_IF};
-            case Fragment::WRAP_V: return {subs[0]->ss.sat + SI_VERIFY, {}};
-            case Fragment::WRAP_J: return {SI_SIZE + SI_ZERONOTEQUAL + SI_IF + subs[0]->ss.sat, SI_SIZE + SI_ZERONOTEQUAL + SI_IF};
+            case Fragment::WRAP_A:
+            case Fragment::WRAP_N:
+            case Fragment::WRAP_S: return subs[0]->ss;
+            case Fragment::WRAP_C: return {
+                subs[0]->ss.sat + SatInfo::OP_CHECKSIG(),
+                subs[0]->ss.dsat + SatInfo::OP_CHECKSIG()
+            };
+            case Fragment::WRAP_D: return {
+                SatInfo::OP_DUP() + SatInfo::If() + subs[0]->ss.sat,
+                SatInfo::OP_DUP() + SatInfo::If()
+            };
+            case Fragment::WRAP_V: return {subs[0]->ss.sat + SatInfo::OP_VERIFY(), {}};
+            case Fragment::WRAP_J: return {
+                SatInfo::OP_SIZE() + SatInfo::OP_0NOTEQUAL() + SatInfo::If() + subs[0]->ss.sat,
+                SatInfo::OP_SIZE() + SatInfo::OP_0NOTEQUAL() + SatInfo::If()
+            };
             case Fragment::THRESH: {
-                auto sats = Vector(SI_NONE);
+                // sats[j] is the SatInfo corresponding to all traces reaching j satisfactions.
+                auto sats = Vector(SatInfo::Empty());
                 for (size_t i = 0; i < subs.size(); ++i) {
-                    auto next_sats = Vector(sats[0] + subs[i]->ss.dsat + (i ? SI_ADD : SI_NONE));
+                    // Loop over the subexpressions, processing them one by one. After adding
+                    // element i we need to add OP_ADD (if i>0).
+                    auto add = i ? SatInfo::BinaryOp() : SatInfo::Empty();
+                    // Construct a variable that will become the next sats, starting with index 0.
+                    auto next_sats = Vector(sats[0] + subs[i]->ss.dsat + add);
+                    // Then loop to construct next_sats[1..i].
                     for (size_t j = 1; j < sats.size(); ++j) {
-                        next_sats.push_back(((sats[j] + subs[i]->ss.dsat) | (sats[j - 1] + subs[i]->ss.sat)) + (i ? SI_ADD : SI_NONE));
+                        next_sats.push_back(((sats[j] + subs[i]->ss.dsat) | (sats[j - 1] + subs[i]->ss.sat)) + add);
                     }
-                    next_sats.push_back(sats[sats.size() - 1] + subs[i]->ss.sat + (i ? SI_ADD : SI_NONE));
+                    // Finally construct next_sats[i+1].
+                    next_sats.push_back(sats[sats.size() - 1] + subs[i]->ss.sat + add);
+                    // Switch over.
                     sats = std::move(next_sats);
                 }
-                return {sats[k] + SI_PUSH + SI_EQUAL, sats[0] + SI_PUSH + SI_EQUAL};
+                // To satisfy thresh we need k satisfactions; to dissatisfy with need 0. In both
+                // cases a push of k and an OP_EQUAL follow.
+                return {
+                    sats[k] + SatInfo::Push() + SatInfo::OP_EQUAL(),
+                    sats[0] + SatInfo::Push() + SatInfo::OP_EQUAL()
+                };
             }
         }
         assert(false);
