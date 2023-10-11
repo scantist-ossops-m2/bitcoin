@@ -1023,77 +1023,19 @@ void SatisfactionToWitness(MsCtx ctx, CScriptWitness& witness, const CScript& sc
     witness.stack.push_back(*builder.GetSpendData().scripts.begin()->second.begin());
 }
 
-/** Perform various applicable tests on a miniscript Node. */
-void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& provider)
+void TestNodeSatisfaction(const MsCtx script_ctx, const NodeRef& node, int nop_pad, int nip_pad)
 {
-    if (!node) return;
-
-    // Check that it roundtrips to text representation
-    PARSER_CTX.script_ctx = script_ctx;
-    std::optional<std::string> str{node->ToString(PARSER_CTX)};
-    assert(str);
-    auto parsed = miniscript::FromString(*str, PARSER_CTX);
-    assert(parsed);
-    assert(*parsed == *node);
-
-    // Check consistency between script size estimation and real size.
-    auto script = node->ToScript(PARSER_CTX);
-    assert(node->ScriptSize() == script.size());
-
-    // Check consistency of "x" property with the script (type K is excluded, because it can end
-    // with a push of a key, which could match these opcodes).
-    if (!(node->GetType() << "K"_mst)) {
-        bool ends_in_verify = !(node->GetType() << "x"_mst);
-        assert(ends_in_verify == (script.back() == OP_CHECKSIG || script.back() == OP_CHECKMULTISIG || script.back() == OP_EQUAL || script.back() == OP_NUMEQUAL));
-    }
-
-    // The rest of the checks only apply when testing a valid top-level script.
-    if (!node->IsValidTopLevel()) return;
-
-    // Check roundtrip to script
-    auto decoded = miniscript::FromScript(script, PARSER_CTX);
-    assert(decoded);
-    // Note we can't use *decoded == *node because the miniscript representation may differ, so we check that:
-    // - The script corresponding to that decoded form matches exactly
-    // - The type matches exactly
-    assert(decoded->ToScript(PARSER_CTX) == script);
-    assert(decoded->GetType() == node->GetType());
-
-    // Optionally pad the script or the witness in order to increase the sensitivity of the tests of
-    // the resources limits logic.
     CScriptWitness witness_mal, witness_nonmal;
-    if (provider.ConsumeBool()) {
-        // Under P2WSH, optionally pad the script with OP_NOPs to max op the ops limit of the constructed script.
-        // This makes the script obviously not actually miniscript-compatible anymore, but the
-        // signatures constructed in this test don't commit to the script anyway, so the same
-        // miniscript satisfier will work. This increases the sensitivity of the test to the ops
-        // counting logic being too low, especially for simple scripts.
-        // Do this optionally because we're not solely interested in cases where the number of ops is
-        // maximal.
-        // Do not pad more than what would cause MAX_STANDARD_P2WSH_SCRIPT_SIZE to be reached, however,
-        // as that also invalidates scripts.
-        const auto node_ops{node->GetOps()};
-        if (!IsTapscript(script_ctx) && node_ops && *node_ops < MAX_OPS_PER_SCRIPT
-            && node->ScriptSize() < MAX_STANDARD_P2WSH_SCRIPT_SIZE) {
-            int add = std::min<int>(
-                MAX_OPS_PER_SCRIPT - *node_ops,
-                MAX_STANDARD_P2WSH_SCRIPT_SIZE - node->ScriptSize());
-            for (int i = 0; i < add; ++i) script.push_back(OP_NOP);
-        }
-
-        // Under Tapscript, optionally pad the stack up to the limit minus the calculated maximum execution stack
-        // size to assert a Miniscript would never add more elements to the stack during execution than anticipated.
-        const auto node_exec_ss{node->GetExecStackSize()};
-        if (miniscript::IsTapscript(script_ctx) && node_exec_ss && *node_exec_ss < MAX_STACK_SIZE) {
-            unsigned add{(unsigned)MAX_STACK_SIZE - *node_exec_ss};
-            witness_mal.stack.resize(add);
-            witness_nonmal.stack.resize(add);
-            script.reserve(add);
-            for (unsigned i = 0; i < add; ++i) script.push_back(OP_NIP);
-        }
-    }
-
     SATISFIER_CTX.script_ctx = script_ctx;
+    auto script = node->ToScript(PARSER_CTX);
+
+    for (int i = 0; i < nop_pad; ++i) {
+        script.push_back(OP_NOP);
+    }
+    witness_mal.stack.resize(nip_pad);
+    witness_nonmal.stack.resize(nip_pad);
+    script.reserve(nip_pad);
+    for (int i = 0; i < nip_pad; ++i) script.push_back(OP_NIP);
 
     // Get the ScriptPubKey for this script, filling spend data if it's Taproot.
     TaprootBuilder builder;
@@ -1184,6 +1126,75 @@ void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& p
         return false;
     });
     assert(mal_success == satisfiable);
+}
+
+/** Perform various applicable tests on a miniscript Node. */
+void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& provider)
+{
+    if (!node) return;
+
+    // Check that it roundtrips to text representation
+    PARSER_CTX.script_ctx = script_ctx;
+    std::optional<std::string> str{node->ToString(PARSER_CTX)};
+    assert(str);
+    auto parsed = miniscript::FromString(*str, PARSER_CTX);
+    assert(parsed);
+    assert(*parsed == *node);
+
+    // Check consistency between script size estimation and real size.
+    auto script = node->ToScript(PARSER_CTX);
+    assert(node->ScriptSize() == script.size());
+
+    // Check consistency of "x" property with the script (type K is excluded, because it can end
+    // with a push of a key, which could match these opcodes).
+    if (!(node->GetType() << "K"_mst)) {
+        bool ends_in_verify = !(node->GetType() << "x"_mst);
+        assert(ends_in_verify == (script.back() == OP_CHECKSIG || script.back() == OP_CHECKMULTISIG || script.back() == OP_EQUAL || script.back() == OP_NUMEQUAL));
+    }
+
+    // The rest of the checks only apply when testing a valid top-level script.
+    if (!node->IsValidTopLevel()) return;
+
+    // Check roundtrip to script
+    auto decoded = miniscript::FromScript(script, PARSER_CTX);
+    assert(decoded);
+    // Note we can't use *decoded == *node because the miniscript representation may differ, so we check that:
+    // - The script corresponding to that decoded form matches exactly
+    // - The type matches exactly
+    assert(decoded->ToScript(PARSER_CTX) == script);
+    assert(decoded->GetType() == node->GetType());
+
+    int nop_pad{0};
+    int nip_pad{0};
+    // Optionally pad the script or the witness in order to increase the sensitivity of the tests of
+    // the resources limits logic.
+    if (provider.ConsumeBool()) {
+        // Under P2WSH, optionally pad the script with OP_NOPs to max op the ops limit of the constructed script.
+        // This makes the script obviously not actually miniscript-compatible anymore, but the
+        // signatures constructed in this test don't commit to the script anyway, so the same
+        // miniscript satisfier will work. This increases the sensitivity of the test to the ops
+        // counting logic being too low, especially for simple scripts.
+        // Do this optionally because we're not solely interested in cases where the number of ops is
+        // maximal.
+        // Do not pad more than what would cause MAX_STANDARD_P2WSH_SCRIPT_SIZE to be reached, however,
+        // as that also invalidates scripts.
+        const auto node_ops{node->GetOps()};
+        if (!IsTapscript(script_ctx) && node_ops && *node_ops < MAX_OPS_PER_SCRIPT
+            && node->ScriptSize() < MAX_STANDARD_P2WSH_SCRIPT_SIZE) {
+            nop_pad = std::min<int>(
+                MAX_OPS_PER_SCRIPT - *node_ops,
+                MAX_STANDARD_P2WSH_SCRIPT_SIZE - node->ScriptSize());
+        }
+
+        // Under Tapscript, optionally pad the stack up to the limit minus the calculated maximum execution stack
+        // size to assert a Miniscript would never add more elements to the stack during execution than anticipated.
+        const auto node_exec_ss{node->GetExecStackSize()};
+        if (miniscript::IsTapscript(script_ctx) && node_exec_ss && *node_exec_ss < MAX_STACK_SIZE) {
+            nip_pad = MAX_STACK_SIZE - *node_exec_ss;
+        }
+    }
+
+    TestNodeSatisfaction(script_ctx, node, /*nop_pad=*/nop_pad, /*nip_pad=*/nip_pad);
 }
 
 } // namespace
