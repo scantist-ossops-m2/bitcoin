@@ -277,6 +277,66 @@ struct SatisfierContext : ParserContext {
     }
 };
 
+struct MaybeSatisfierContext : SatisfierContext {
+    constexpr MaybeSatisfierContext(MsCtx ctx) noexcept : SatisfierContext(ctx) {}
+
+    miniscript::Availability CheckAfter(uint32_t value) const
+    {
+        if (value & 4) return miniscript::Availability::MAYBE;
+        return SatisfierContext::CheckAfter(value);
+    }
+
+    miniscript::Availability CheckOlder(uint32_t value) const
+    {
+        if (value & 8) return miniscript::Availability::MAYBE;
+        return SatisfierContext::CheckOlder(value);
+    }
+
+    miniscript::Availability Sign(const CPubKey& key, std::vector<unsigned char>& sig) const {
+        if (key[13] & 1) {
+            if (miniscript::IsTapscript(script_ctx)) {
+                sig.resize(65);
+            } else {
+                sig.resize(72);
+            }
+            return miniscript::Availability::MAYBE;
+        }
+        return SatisfierContext::Sign(key, sig);
+    }
+
+    miniscript::Availability SatSHA256(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        if (hash[14] & 1) {
+            preimage.resize(32);
+            return miniscript::Availability::MAYBE;
+        }
+        return SatisfierContext::SatSHA256(hash, preimage);
+    }
+
+    miniscript::Availability SatRIPEMD160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        if (hash[15] & 1) {
+            preimage.resize(32);
+            return miniscript::Availability::MAYBE;
+        }
+        return SatisfierContext::SatRIPEMD160(hash, preimage);
+    }
+
+    miniscript::Availability SatHASH256(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        if (hash[16] & 1) {
+            preimage.resize(32);
+            return miniscript::Availability::MAYBE;
+        }
+        return SatisfierContext::SatHASH256(hash, preimage);
+    }
+
+    miniscript::Availability SatHASH160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        if (hash[17] & 1) {
+            preimage.resize(32);
+            return miniscript::Availability::MAYBE;
+        }
+        return SatisfierContext::SatHASH160(hash, preimage);
+    }
+};
+
 //! Context to check a satisfaction against the pre-computed data.
 const struct CheckerContext: BaseSignatureChecker {
     // Signature checker methods. Checks the right dummy signature is used.
@@ -1123,8 +1183,22 @@ void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& p
         // Compute witness size (excluding script push, control block, and witness count encoding).
         const size_t wit_size = GetSerializeSize(stack_nonmal, PROTOCOL_VERSION) - GetSizeOfCompactSize(stack_nonmal.size());
         assert(wit_size <= *node->GetWitnessSize());
+        // If known nonmalleable, compute maximal witness size through maybe signing (with marks some signature and preimages as MAYBE), and compare.
+        if (node->IsNonMalleable()) {
+            std::vector<std::vector<unsigned char>> stack_nonmal_dummy;
+            const auto nonmal_dummy = node->Satisfy(MaybeSatisfierContext{script_ctx}, stack_nonmal_dummy, true);
+            // Given that the node is non-malleable, and we know a satisfaction exists with specific availabilities,
+            // there must at least be some conditions under which nonmalleable satisfaction succeeds.
+            assert(nonmal_dummy != miniscript::Availability::NO);
+            const size_t max_wit_size = GetSerializeSize(stack_nonmal_dummy, PROTOCOL_VERSION) - GetSizeOfCompactSize(stack_nonmal_dummy.size());
+            // The maximal computed "maybe" witness size must not exceed GetWitnessSize (which returns an upper bound
+            // for *any* non-malleable satisfaction.
+            assert(max_wit_size <= *node->GetWitnessSize());
+            // The actually constructed witness size must not exceed the maybe witness size.
+            assert(wit_size <= max_wit_size);
+        }
 
-        // Test non-malleable satisfaction.
+        // Test non-malleable satisfaction against script interpreter.
         witness_nonmal.stack.insert(witness_nonmal.stack.end(), std::make_move_iterator(stack_nonmal.begin()), std::make_move_iterator(stack_nonmal.end()));
         SatisfactionToWitness(script_ctx, witness_nonmal, script, builder);
         ScriptError serror;
@@ -1139,7 +1213,18 @@ void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& p
     }
 
     if (mal_success && (!nonmal_success || witness_mal.stack != witness_nonmal.stack)) {
-        // Test malleable satisfaction only if it's different from the non-malleable one.
+        // Test only if it's different from the non-malleable one.
+
+        // Compute maximal witness size through maybe signing.
+        const size_t mal_wit_size = GetSerializeSize(stack_mal, PROTOCOL_VERSION) - GetSizeOfCompactSize(stack_mal.size());
+        std::vector<std::vector<unsigned char>> stack_mal_dummy;
+        const auto mal_dummy = node->Satisfy(MaybeSatisfierContext{script_ctx}, stack_mal_dummy, false);
+        assert(mal_dummy == miniscript::Availability::MAYBE || mal_dummy == miniscript::Availability::YES);
+        const size_t max_wit_size = GetSerializeSize(stack_mal_dummy, PROTOCOL_VERSION) - GetSizeOfCompactSize(stack_mal_dummy.size());
+        // The actually computed witness size must not exceed the result of the maybe computation.
+        assert(mal_wit_size <= max_wit_size);
+
+        // Test malleable satisfaction against script interpreter.
         witness_mal.stack.insert(witness_mal.stack.end(), std::make_move_iterator(stack_mal.begin()), std::make_move_iterator(stack_mal.end()));
         SatisfactionToWitness(script_ctx, witness_mal, script, builder);
         ScriptError serror;
