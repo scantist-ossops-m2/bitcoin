@@ -235,6 +235,7 @@ struct ScriptParserContext {
     }
 };
 
+
 //! Context to produce a satisfaction for a Miniscript node using the pre-computed data.
 struct SatisfierContext : ParserContext {
 
@@ -274,6 +275,40 @@ struct SatisfierContext : ParserContext {
     }
     miniscript::Availability SatHASH160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
         return LookupHash(hash, preimage, TEST_DATA.hash160_preimages);
+    }
+};
+
+struct DummySatisfierContext : ParserContext {
+    constexpr DummySatisfierContext(MsCtx ctx) noexcept : ParserContext(ctx) {}
+
+    // These must match SatisfierContext, to make sure the same branches are explored.
+    bool CheckAfter(uint32_t value) const { return value % 2; }
+    bool CheckOlder(uint32_t value) const { return value % 2; }
+
+    miniscript::Availability Sign(const CPubKey& key, std::vector<unsigned char>& sig) const {
+        if (miniscript::IsTapscript(script_ctx)) {
+            sig.resize(65);
+        } else {
+            sig.resize(72);
+        }
+        return miniscript::Availability::MAYBE;
+    }
+
+    miniscript::Availability SatSHA256(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        preimage.resize(32);
+        return miniscript::Availability::MAYBE;
+    }
+    miniscript::Availability SatRIPEMD160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        preimage.resize(32);
+        return miniscript::Availability::MAYBE;
+    }
+    miniscript::Availability SatHASH256(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        preimage.resize(32);
+        return miniscript::Availability::MAYBE;
+    }
+    miniscript::Availability SatHASH160(const std::vector<unsigned char>& hash, std::vector<unsigned char>& preimage) const {
+        preimage.resize(32);
+        return miniscript::Availability::MAYBE;
     }
 };
 
@@ -1123,6 +1158,16 @@ void TestNode(const MsCtx script_ctx, const NodeRef& node, FuzzedDataProvider& p
         // Compute witness size (excluding script push, control block, and witness count encoding).
         const size_t wit_size = GetSerializeSize(stack_nonmal, PROTOCOL_VERSION) - GetSizeOfCompactSize(stack_nonmal.size());
         assert(wit_size <= *node->GetWitnessSize());
+        // If known nonmalleable, compute maximal witness size through dummy/maybe signing (more accurate), and compare.
+        if (node->IsNonMalleable() && node->NeedsSignature()) {
+            fprintf(stderr, "OOPS: %s\n", str->c_str());
+            std::vector<std::vector<unsigned char>> stack_nonmal_dummy;
+            const auto nonmal_dummy = node->Satisfy(DummySatisfierContext{script_ctx}, stack_nonmal_dummy, true);
+            assert(nonmal_dummy == miniscript::Availability::MAYBE || nonmal_dummy == miniscript::Availability::YES);
+            const size_t max_wit_size = GetSerializeSize(stack_nonmal_dummy, PROTOCOL_VERSION) - GetSizeOfCompactSize(stack_nonmal_dummy.size());
+            assert(max_wit_size <= *node->GetWitnessSize());
+            assert(wit_size <= max_wit_size);
+        }
 
         // Test non-malleable satisfaction.
         witness_nonmal.stack.insert(witness_nonmal.stack.end(), std::make_move_iterator(stack_nonmal.begin()), std::make_move_iterator(stack_nonmal.end()));
