@@ -296,81 +296,99 @@ size_t ComputeScriptLen(Fragment fragment, Type sub0typ, size_t subsize, uint32_
 InputStack InputStack::MakeUnavailable() noexcept
 {
     InputStack stack;
-    stack.available = Availability::NO;
-    stack.size = std::numeric_limits<size_t>::max();
+    stack.stack_data[InputStackType{}.Index()] = InputStackData{};
     return stack;
 }
 
 InputStack InputStack::MakeEmpty() noexcept
 {
     InputStack stack;
+    stack.stack_data[InputStackType{/*hassig=*/false, /*ismal=*/false}.Index()] = InputStackData{};
     return stack;
 }
 
 InputStack InputStack::MakeSingle(std::vector<unsigned char> data, Availability avail, bool has_signature) noexcept
 {
-    if (avail == Availability::NO) return MakeUnavailable();
     InputStack stack;
-    stack.available = avail;
-    stack.size = 1 + data.size();
-    stack.has_sig = has_signature;
-    stack.stack.push_back(std::move(data));
+    if (avail == Availability::NO || avail == Availability::MAYBE) {
+        // Unavailability is possible if unavailable, or when it is uncertain.
+        stack.stack_data[InputStackType{}.Index()] = InputStackData{};
+    }
+    if (avail == Availability::YES || avail == Availability::MAYBE) {
+        // Availability is possible if available, or when it is uncertain.
+        auto& stack_data = stack.stack_data[InputStackType{/*hassig=*/has_signature, /*ismal=*/false}.Index()];
+        stack_data = InputStackData{.non_canon = false, .size = 1 + data.size(), .stack = Vector(std::move(data))};
+    }
     return stack;
 }
 
 InputStack& InputStack::SetNonCanon() {
-    non_canon = true;
+    for (unsigned stype = 0; stype < InputStackType::COUNT; ++stype) {
+        // Mark all available, possible, stack as non-canonical.
+        if (stype != InputStackType::FromIndex(stype).Index() && stack_data[stype]) {
+            stack_data[stype]->non_canon = true;
+        }
+    }
     return *this;
 }
 
-InputStack& InputStack::SetMalleable() {
-    malleable = true;
-    return *this;
+InputStackPair Concat(InputStackPair a, InputStackPair b) noexcept
+{
+    // If either input is unavailable, the result is unavailable.
+    if (a.first.unavailable || b.first.unavailable) return {};
+    // Otherwise the result is available, and signatures and malleability are inherent from both.
+    InputStackType o_type{/*hassig=*/a.first.has_signature || b.first.has_signature,
+                          /*ismal=*/a.first.is_malleable || b.first.is_malleable};
+    return {o_type, InputStackData{
+        .non_canon = a.second.non_canon || b.second.non_canon,
+        .size = a.second.size + b.second.size,
+        .stack = Cat(std::move(a.second.stack), std::move(b.second.stack))
+    }};
 }
 
-InputStack operator+(InputStack a, InputStack b) {
-    a.stack = Cat(std::move(a.stack), std::move(b.stack));
-    if (a.available != Availability::NO && b.available != Availability::NO) a.size += b.size;
-    a.has_sig |= b.has_sig;
-    a.malleable |= b.malleable;
-    a.non_canon |= b.non_canon;
-    if (a.available == Availability::NO) {
-        return a;
-    } else if (b.available == Availability::NO) {
-        return b;
-    } else if (a.available == Availability::MAYBE || b.available == Availability::MAYBE) {
-        a.available = Availability::MAYBE;
+InputStackPair Choice(InputStackPair a, InputStackPair b) noexcept
+{
+    // If a or b is unavailable, pick the other one (even if that one is also unavailable).
+    if (a.first.unavailable) return b;
+    if (b.first.unavailable) return a;
+    // The result of a choice is malleable if both inputs are available and neither has signatures.
+    bool make_mal = !a.first.has_signature && !b.first.has_signature;
+    // Decide which input stack to choose, in order of decreasing importance:
+    // - Lack of signature is better (because if there is a choice for with or without signature,
+    //   and with signature is picked, attackers may be malleate to convert to the one without.
+    // - Non-malleability is better (better chances for the final result to be non-malleable).
+    // - Smaller witness size is better (cheaper).
+    // - Fewer witness items is better (for the rare case where that makes the difference between
+    //   going over 252 witness items or not, which adds 2 bytes to the comact size).
+    // - As a tie-breaker, pick a.
+    bool pick_b{false};
+    if (a.first.has_signature != b.first.has_signature) {
+        pick_b = a.first.has_signature;
+    } else if (a.first.is_malleable != b.first.is_malleable) {
+        pick_b = a.first.is_malleable;
+    } else if (a.second.size != b.second.size) {
+        pick_b = b.second.size < a.second.size;
+    } else {
+        pick_b = b.second.stack.size() < a.second.stack.size();
     }
-    return a;
+    // Return the picked choice, possibly marked as malleable.
+    if (pick_b) {
+        return {InputStackType{
+            /*hassig=*/b.first.has_signature,
+            /*ismal=*/b.first.is_malleable || make_mal
+        }, std::move(b.second)};
+    } else {
+        return {InputStackType{
+            /*hassig=*/a.first.has_signature,
+            /*ismal=*/a.first.is_malleable || make_mal
+        }, std::move(a.second)};
+    }
 }
 
-InputStack operator|(InputStack a, InputStack b) {
-    // If only one is invalid, pick the other one. If both are invalid, pick an arbitrary one.
-    if (a.available == Availability::NO) return b;
-    if (b.available == Availability::NO) return a;
-    // If only one of the solutions has a signature, we must pick the other one.
-    if (!a.has_sig && b.has_sig) return a;
-    if (!b.has_sig && a.has_sig) return b;
-    if (!a.has_sig && !b.has_sig) {
-        // If neither solution requires a signature, the result is inevitably malleable.
-        a.malleable = true;
-        b.malleable = true;
-    } else {
-        // If both options require a signature, prefer the non-malleable one.
-        if (b.malleable && !a.malleable) return a;
-        if (a.malleable && !b.malleable) return b;
-    }
-    // Between two malleable or two non-malleable solutions, pick the smaller one between
-    // YESes, and the bigger ones between MAYBEs. Prefer YES over MAYBE.
-    if (a.available == Availability::YES && b.available == Availability::YES) {
-        return std::move(a.size <= b.size ? a : b);
-    } else if (a.available == Availability::MAYBE && b.available == Availability::MAYBE) {
-        return std::move(a.size >= b.size ? a : b);
-    } else if (a.available == Availability::YES) {
-        return a;
-    } else {
-        return b;
-    }
+InputStackPair MakeMalleable(InputStackPair a) noexcept
+{
+    if (a.first.unavailable) return {};
+    return {InputStackType{/*hassig=*/a.first.has_signature, /*ismal=*/true}, std::move(a.second)};
 }
 
 std::optional<std::vector<Opcode>> DecomposeScript(const CScript& script)
@@ -439,41 +457,78 @@ int FindNextChar(Span<const char> sp, const char m)
 void SanityCheckSatisfaction(Type typ, const InputResult& ret)
 {
     // Do a consistency check between the satisfaction code and the type checker
-    // (the actual satisfaction code in ProduceInputHelper does not use GetType)
+    // (the actual satisfaction code in ProduceInputHelper does not use the node's Type)
 
     // For 'z' nodes, available satisfactions/dissatisfactions must have stack size 0.
-    if (typ << "z"_mst && ret.nsat.available != Availability::NO) Assume(ret.nsat.stack.size() == 0);
-    if (typ << "z"_mst && ret.sat.available != Availability::NO) Assume(ret.sat.stack.size() == 0);
+    if (typ << "z"_mst) {
+        for (unsigned stype = 0; stype < InputStackType::COUNT; ++stype) {
+            if (InputStackType::FromIndex(stype).unavailable) continue;
+            if (ret.sat.stack_data[stype]) Assume(ret.sat.stack_data[stype]->stack.size() == 0);
+            if (ret.nsat.stack_data[stype]) Assume(ret.nsat.stack_data[stype]->stack.size() == 0);
+        }
+    }
 
     // For 'o' nodes, available satisfactions/dissatisfactions must have stack size 1.
-    if (typ << "o"_mst && ret.nsat.available != Availability::NO) Assume(ret.nsat.stack.size() == 1);
-    if (typ << "o"_mst && ret.sat.available != Availability::NO) Assume(ret.sat.stack.size() == 1);
+    if (typ << "o"_mst) {
+        for (unsigned stype = 0; stype < InputStackType::COUNT; ++stype) {
+            if (InputStackType::FromIndex(stype).unavailable) continue;
+            if (ret.nsat.stack_data[stype]) Assume(ret.nsat.stack_data[stype]->stack.size() == 1);
+            if (ret.sat.stack_data[stype]) Assume(ret.sat.stack_data[stype]->stack.size() == 1);
+        }
+    }
 
     // For 'n' nodes, available satisfactions/dissatisfactions must have stack size 1 or larger. For satisfactions,
     // the top element cannot be 0.
-    if (typ << "n"_mst && ret.sat.available != Availability::NO) Assume(ret.sat.stack.size() >= 1);
-    if (typ << "n"_mst && ret.nsat.available != Availability::NO) Assume(ret.nsat.stack.size() >= 1);
-    if (typ << "n"_mst && ret.sat.available != Availability::NO) Assume(!ret.sat.stack.back().empty());
+    if (typ << "n"_mst) {
+        for (unsigned stype = 0; stype < InputStackType::COUNT; ++stype) {
+            if (InputStackType::FromIndex(stype).unavailable) continue;
+            if (ret.sat.stack_data[stype]) Assume(ret.sat.stack_data[stype]->stack.size() >= 1);
+            if (ret.nsat.stack_data[stype]) Assume(ret.nsat.stack_data[stype]->stack.size() >= 1);
+            if (ret.sat.stack_data[stype]) Assume(!ret.sat.stack_data[stype]->stack.back().empty());
+        }
+    }
 
     // For 'd' nodes, a dissatisfaction must exist, and they must not need a signature. If it is non-malleable,
     // it must be canonical.
-    if (typ << "d"_mst) Assume(ret.nsat.available != Availability::NO);
-    if (typ << "d"_mst) Assume(!ret.nsat.has_sig);
-    if (typ << "d"_mst && !ret.nsat.malleable) Assume(!ret.nsat.non_canon);
+    if (typ << "d"_mst) {
+        Assume(!ret.nsat.stack_data[InputStackType().Index()]);
+        Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/true, /*ismal=*/false).Index()]);
+        Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/true, /*ismal=*/true).Index()]);
+        if (ret.nsat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/false).Index()]) {
+            Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/false).Index()]->non_canon);
+        }
+    }
 
     // For 'f'/'s' nodes, dissatisfactions/satisfactions must have a signature.
-    if (typ << "f"_mst && ret.nsat.available != Availability::NO) Assume(ret.nsat.has_sig);
-    if (typ << "s"_mst && ret.sat.available != Availability::NO) Assume(ret.sat.has_sig);
+    if (typ << "f"_mst) {
+        Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/false).Index()]);
+        Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/false, /*ismal*/true).Index()]);
+    }
+    if (typ << "s"_mst) {
+        Assume(!ret.sat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/false).Index()]);
+        Assume(!ret.sat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/true).Index()]);
+    }
 
     // For non-malleable 'e' nodes, a non-malleable dissatisfaction must exist.
-    if (typ << "me"_mst) Assume(ret.nsat.available != Availability::NO);
-    if (typ << "me"_mst) Assume(!ret.nsat.malleable);
+    if (typ << "me"_mst) {
+        Assume(!ret.nsat.stack_data[InputStackType().Index()]);
+        Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/true).Index()]);
+        Assume(!ret.nsat.stack_data[InputStackType(/*hassig=*/true, /*ismal=*/true).Index()]);
+    }
 
     // For 'm' nodes, if a satisfaction exists, it must be non-malleable.
-    if (typ << "m"_mst && ret.sat.available != Availability::NO) Assume(!ret.sat.malleable);
+    if (typ << "m"_mst) {
+        Assume(!ret.sat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/true).Index()]);
+        Assume(!ret.sat.stack_data[InputStackType(/*hassig=*/true, /*ismal=*/true).Index()]);
+    }
 
     // If a non-malleable satisfaction exists, it must be canonical.
-    if (ret.sat.available != Availability::NO && !ret.sat.malleable) Assume(!ret.sat.non_canon);
+    if (ret.sat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/false).Index()]) {
+        Assume(!ret.sat.stack_data[InputStackType(/*hassig=*/false, /*ismal=*/false).Index()]->non_canon);
+    }
+    if (ret.sat.stack_data[InputStackType(/*hassig=*/true, /*ismal=*/false).Index()]) {
+        Assume(!ret.sat.stack_data[InputStackType(/*hassig=*/true, /*ismal=*/false).Index()]->non_canon);
+    }
 }
 
 } // namespace internal

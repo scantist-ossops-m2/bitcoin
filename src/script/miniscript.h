@@ -291,25 +291,64 @@ size_t ComputeScriptLen(Fragment fragment, Type sub0typ, size_t subsize, uint32_
 //! A helper sanitizer/checker for the output of CalcType.
 Type SanitizeType(Type x);
 
-//! An object representing a sequence of witness stack elements.
-struct InputStack {
-    /** Whether this stack is valid for its intended purpose (satisfaction or dissatisfaction of a Node).
-     *  The MAYBE value is used for size estimation, when keys/preimages may actually be unavailable,
-     *  but may be available at signing time. This makes the InputStack structure and signing logic,
-     *  filled with dummy signatures/preimages usable for witness size estimation.
-     */
-    Availability available = Availability::YES;
-    //! Whether this stack contains a digital signature.
-    bool has_sig = false;
-    //! Whether this stack is malleable (can be turned into an equally valid other stack by a third party).
-    bool malleable = false;
+//! An object representing a witness stack for a particular stack type.
+struct InputStackData
+{
     //! Whether this stack is non-canonical (using a construction known to be unnecessary for satisfaction).
     //! Note that this flag does not affect the satisfaction algorithm; it is only used for sanity checking.
-    bool non_canon = false;
+    bool non_canon{false};
     //! Serialized witness size.
-    size_t size = 0;
+    size_t size{0};
     //! Data elements.
     std::vector<std::vector<unsigned char>> stack;
+};
+
+/** Data type to identify the 5 distinct input stack types we care about:
+ *
+ * - without signature, non-malleable
+ * - without signature, malleable
+ * - with signature, non-malleable
+ * - with signature, malleable
+ * - unavailable (just a marker to indicate it's at least possible no input stack is known).
+ */
+struct InputStackType
+{
+    bool has_signature : 1;
+    bool is_malleable : 1;
+    bool unavailable : 1;
+
+    static constexpr unsigned COUNT{5};
+
+    /** Construct an unavailable InputStackType. */
+    constexpr InputStackType() noexcept : has_signature{false}, is_malleable{false}, unavailable{true} {};
+    /** Construct an available InputStackType. */
+    constexpr InputStackType(bool hassig, bool ismal) noexcept : has_signature{hassig}, is_malleable{ismal}, unavailable{false} {};
+
+    /** Which index in the InputStack::stack_data array this type corresponds to. */
+    constexpr unsigned Index() const noexcept { return unavailable ? 4 : (has_signature ? 2 : 0) + (is_malleable ? 1 : 0); }
+
+    constexpr static InputStackType FromIndex(unsigned v) { return v == 4 ? InputStackType{} : InputStackType{/*hassig=*/bool(v & 2), /*ismal=*/bool(v & 1)}; }
+};
+
+using InputStackPair = std::pair<InputStackType, InputStackData>;
+
+//! The operation applied to each pair of possible stacks in InputStack::operator+.
+InputStackPair Concat(InputStackPair a, InputStackPair b) noexcept;
+//! The operation applied to each pair of possible stacks in InputStack::operator|.
+InputStackPair Choice(InputStackPair a, InputStackPair b) noexcept;
+//! The operation applied in stacks in InputStack::MakeMalleable.
+InputStackPair MakeMalleable(InputStackPair a) noexcept;
+
+//! An object representing a sequence of witness stack elements.
+struct InputStack {
+    /** For each stack type, information about the corresponding satisfaction/dissatisfaction, if
+     *  at all possible.
+     *
+     * In normal signing usage, exactly one of these will be not std::nullopt. When size estimating using
+     * the Availability::MAYBE mechanism, there can be multiple. In this case, each also represents the
+     * worst (largest) possibility necessary (but within each possibility, the best possible satisfaction).
+     */
+    std::optional<InputStackData> stack_data[InputStackType::COUNT];
     //! Construct an invalid (unavailable) stack.
     static InputStack MakeUnavailable() noexcept;
     //! Construct a stack consisting of a single element.
@@ -318,12 +357,71 @@ struct InputStack {
     static InputStack MakeEmpty() noexcept;
     //! Mark this input stack as non-canonical (known to not be necessary in non-malleable satisfactions).
     InputStack& SetNonCanon();
-    //! Mark this input stack as malleable.
-    InputStack& SetMalleable();
+
+    /** Apply a function fn that operates on combinations of InputStackPairs in one or more InputStacks.
+     *
+     * Given a function fn, which takes N (N >= 1) InputStackPair arguments as input, and N InputStacks, apply that
+     * function to all (up to 5^N) combinations of InputStackPairs defined by those InputStacks, and aggregate the
+     * result in a new InputStack object that is returned, with the worst (largest witness size) reachable per
+     * InputStackType. */
+    template<class Function, typename... Args>
+    static InputStack Apply(Function fn, const Args&... arg) noexcept {
+        /** Construct an array with the InputStack arguments, so we can access them by index. */
+        const std::array<std::reference_wrapper<const InputStack>, sizeof...(arg)> arg_array{arg...};
+        /** For each of the InputStack arguments, what input stack type we're currently iterating over. */
+        std::array<unsigned, sizeof...(arg)> stype{};
+        /** Return object to aggregate the results in. */
+        InputStack ret;
+        /** Generic lambda that invokes fn with the current combination of InputStackPair arguments. */
+        auto run_fn = [&]<std::size_t... I>(std::index_sequence<I...> seq) {
+            return fn(InputStackPair{InputStackType::FromIndex(stype[I]), *arg_array[I].get().stack_data[stype[I]]}...);
+        };
+        /** Recursive lambda that iterates over all combinations. */
+        auto rec_fn = [&](unsigned level, auto& self) -> void {
+            if (level == sizeof...(arg)) {
+                // Bottom recursion level reached; invoke function.
+                auto res = run_fn(std::make_index_sequence<sizeof...(arg)>{});
+                unsigned idx = res.first.Index();
+                // Keep the result if it's worse than what we had before.
+                if (!ret.stack_data[idx] || res.second.size > ret.stack_data[idx]->size) {
+                    ret.stack_data[idx] = std::move(res.second);
+                }
+            } else {
+                // Iterate over the current level and descend deeper.
+                for (unsigned i = 0; i < InputStackType::COUNT; ++i) {
+                    if (arg_array[level].get().stack_data[i]) {
+                        stype[level] = i;
+                        self(level + 1, self);
+                    }
+                }
+            }
+        };
+        // Invoke the recursive lambda for the top level, and return the result.
+        rec_fn(0, rec_fn);
+        return ret;
+    }
+
+    //! Make a stack malleable.
+    InputStack& SetMalleable()
+    {
+        *this = Apply(MakeMalleable, *this);
+        return *this;
+    }
+
     //! Concatenate two input stacks.
-    friend InputStack operator+(InputStack a, InputStack b);
-    //! Choose between two potential input stacks.
-    friend InputStack operator|(InputStack a, InputStack b);
+    friend InputStack operator+(const InputStack& a, const InputStack& b) { return Apply(Concat, a, b); }
+
+    /** Choose between two potential input stacks.
+     *
+     * Note that this represents a *choice* between different (dis)satisfactions available at
+     * signing time, where the *smallest* of the two options will be preferred (subject to
+     * malleability rules). However, each InputStack can correspond to multiple *possibilities*
+     * about what keys/preimages are available, and between those, the *largest* of the options is
+     * used. So overall, this computes an InputStack object where each stack in it has the largest
+     * witness size reachable over all possibilities for keys/hashes available at signing time, but
+     * within each possibility, the smallest witness size needed for satisfaction.
+     */
+    friend InputStack operator|(const InputStack& a, const InputStack& b) { return Apply(Choice, a, b); }
 };
 
 /** A stack consisting of a single zero-length element (interpreted as 0 by the script interpreter in numeric context). */
@@ -1348,8 +1446,24 @@ private:
                 }
                 case Fragment::OR_B: {
                     auto& x = subres[0], &z = subres[1];
-                    // The (sat(Z) sat(X)) solution is overcomplete (attacker can change either into dsat).
-                    return {z.nsat + x.nsat, (z.nsat + x.sat) | (z.sat + x.nsat) | (z.sat + x.sat).SetMalleable().SetNonCanon()};
+                    auto nsat = z.nsat + x.nsat;
+                    // The satisfaction expression we would want for OR_B is
+                    // ((z.nsat + x.sat) | (z.sat + x.nsat) | (z.sat + x.sat).SetMalleable().SatNonCanon()), but that
+                    // runs into the problem that x.sat and z.sat both appear twice. If e.g. x.sat corresponds to
+                    // multiple possibilities, then this expression will incorrectly consider combinations where the
+                    // first x.sat uses one possibility and the second x.sat another, which leads to incorrect results.
+                    // Instead, use the more low-level InputStack::Apply to iterate over the combinations of the 4
+                    // subexpressions directly.
+                    auto sat = InputStack::Apply([](auto xsat, auto xnsat, auto zsat, auto znsat) {
+                        auto only_x = Concat(std::move(znsat), xsat);
+                        auto only_z = Concat(zsat, std::move(xnsat));
+                        auto both = MakeMalleable(Concat(std::move(zsat), std::move(xsat)));
+                        if (both.first.Index() != InputStackType().Index()) {
+                            both.second.non_canon = true;
+                        }
+                        return Choice(Choice(std::move(only_x), std::move(only_z)), std::move(both));
+                    }, x.sat, x.nsat, z.sat, z.nsat);
+                    return {std::move(nsat), std::move(sat)};
                 }
                 case Fragment::OR_C: {
                     auto& x = subres[0], &z = subres[1];
@@ -1625,9 +1739,18 @@ public:
     template<typename Ctx>
     Availability Satisfy(const Ctx& ctx, std::vector<std::vector<unsigned char>>& stack, bool nonmalleable = true) const {
         auto ret = ProduceInput(ctx);
-        if (nonmalleable && (ret.sat.malleable || !ret.sat.has_sig)) return Availability::NO;
-        stack = std::move(ret.sat.stack);
-        return ret.sat.available;
+        std::optional<internal::InputStackType> source;
+        for (unsigned stype = 0; stype < internal::InputStackType::COUNT; ++stype) {
+            auto st = internal::InputStackType::FromIndex(stype);
+            if (nonmalleable && stype != internal::InputStackType(true, false).Index()) continue;
+            if (!ret.sat.stack_data[stype]) continue;
+            if (!source || ret.sat.stack_data[stype]->size > ret.sat.stack_data[source->Index()]->size) {
+                source = st;
+            }
+        }
+        if (!source) return Availability::NO;
+        stack = std::move(ret.sat.stack_data[source->Index()]->stack);
+        return ret.sat.stack_data[internal::InputStackType().Index()] ? Availability::MAYBE : Availability::YES;
     }
 
     //! Equality testing.
