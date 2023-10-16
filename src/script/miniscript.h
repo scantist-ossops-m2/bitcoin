@@ -310,14 +310,12 @@ struct InputStack {
     size_t size = 0;
     //! Data elements.
     std::vector<std::vector<unsigned char>> stack;
-    //! Construct an empty stack (valid).
-    InputStack() {}
-    //! Construct a valid single-element stack (with an element up to 75 bytes).
-    InputStack(std::vector<unsigned char> in) : size(in.size() + 1), stack(Vector(std::move(in))) {}
-    //! Change availability
-    InputStack& SetAvailable(Availability avail);
-    //! Mark this input stack as having a signature.
-    InputStack& SetWithSig();
+    //! Construct an invalid (unavailable) stack.
+    static InputStack MakeUnavailable() noexcept;
+    //! Construct a stack consisting of a single element.
+    static InputStack MakeSingle(std::vector<unsigned char> data, Availability avail = Availability::YES, bool has_signature = false) noexcept;
+    //! Construct an empty stack.
+    static InputStack MakeEmpty() noexcept;
     //! Mark this input stack as non-canonical (known to not be necessary in non-malleable satisfactions).
     InputStack& SetNonCanon();
     //! Mark this input stack as malleable.
@@ -329,15 +327,15 @@ struct InputStack {
 };
 
 /** A stack consisting of a single zero-length element (interpreted as 0 by the script interpreter in numeric context). */
-static const auto ZERO = InputStack(std::vector<unsigned char>());
+static const auto ZERO = InputStack::MakeSingle(/*data=*/{});
 /** A stack consisting of a single malleable 32-byte 0x0000...0000 element (for dissatisfying hash challenges). */
-static const auto ZERO32 = InputStack(std::vector<unsigned char>(32, 0)).SetMalleable();
+static const auto ZERO32 = InputStack::MakeSingle(/*data=*/std::vector<unsigned char>(32, 0)).SetMalleable();
 /** A stack consisting of a single 0x01 element (interpreted as 1 by the script interpreted in numeric context). */
-static const auto ONE = InputStack(Vector((unsigned char)1));
+static const auto ONE = InputStack::MakeSingle(/*data=*/{1});
 /** The empty stack. */
-static const auto EMPTY = InputStack();
+static const auto EMPTY = InputStack::MakeEmpty();
 /** A stack representing the lack of any (dis)satisfactions. */
-static const auto INVALID = InputStack().SetAvailable(Availability::NO);
+static const auto INVALID = InputStack::MakeUnavailable();
 
 //! A pair of a satisfaction and a dissatisfaction InputStack.
 struct InputResult {
@@ -1200,12 +1198,16 @@ private:
                 case Fragment::PK_K: {
                     std::vector<unsigned char> sig;
                     Availability avail = ctx.Sign(node.keys[0], sig);
-                    return {ZERO, InputStack(std::move(sig)).SetWithSig().SetAvailable(avail)};
+                    return {ZERO, InputStack::MakeSingle(/*data=*/std::move(sig), /*avail=*/avail, /*has_signature=*/true)};
                 }
                 case Fragment::PK_H: {
                     std::vector<unsigned char> key = ctx.ToPKBytes(node.keys[0]), sig;
                     Availability avail = ctx.Sign(node.keys[0], sig);
-                    return {ZERO + InputStack(key), (InputStack(std::move(sig)).SetWithSig() + InputStack(key)).SetAvailable(avail)};
+                    return {
+                        ZERO + InputStack::MakeSingle(/*data=*/key),
+                        InputStack::MakeSingle(/*data=*/std::move(sig), /*avail=*/avail, /*has_signature=*/true) +
+                            InputStack::MakeSingle(/*data=*/key)
+                    };
                 }
                 case Fragment::MULTI_A: {
                     // sats[j] represents the best stack containing j valid signatures (out of the first i keys).
@@ -1217,7 +1219,7 @@ private:
                         std::vector<unsigned char> sig;
                         Availability avail = ctx.Sign(node.keys[node.keys.size() - 1 - i], sig);
                         // Compute signature stack for just this key.
-                        auto sat = InputStack(std::move(sig)).SetWithSig().SetAvailable(avail);
+                        auto sat = InputStack::MakeSingle(/*data=*/std::move(sig), /*avail=*/avail, /*has_signature=*/true);
                         // Compute the next sats vector: next_sats[0] is a copy of sats[0] (no signatures). All further
                         // next_sats[j] are equal to either the existing sats[j] + ZERO, or sats[j-1] plus a signature
                         // for the current (i'th) key. The very last element needs all signatures filled.
@@ -1244,7 +1246,7 @@ private:
                         std::vector<unsigned char> sig;
                         Availability avail = ctx.Sign(node.keys[i], sig);
                         // Compute signature stack for just the i'th key.
-                        auto sat = InputStack(std::move(sig)).SetWithSig().SetAvailable(avail);
+                        auto sat = InputStack::MakeSingle(/*data=*/std::move(sig), /*avail=*/avail, /*has_signature=*/true);
                         // Compute the next sats vector: next_sats[0] is a copy of sats[0] (no signatures). All further
                         // next_sats[j] are equal to either the existing sats[j], or sats[j-1] plus a signature for the
                         // current (i'th) key. The very last element needs all signatures filled.
@@ -1305,22 +1307,22 @@ private:
                 case Fragment::SHA256: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatSHA256(node.data, preimage);
-                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
+                    return {ZERO32, InputStack::MakeSingle(/*data=*/std::move(preimage), /*avail=*/avail)};
                 }
                 case Fragment::RIPEMD160: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatRIPEMD160(node.data, preimage);
-                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
+                    return {ZERO32, InputStack::MakeSingle(/*data=*/std::move(preimage), /*avail=*/avail)};
                 }
                 case Fragment::HASH256: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatHASH256(node.data, preimage);
-                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
+                    return {ZERO32, InputStack::MakeSingle(/*data=*/std::move(preimage), /*avail=*/avail)};
                 }
                 case Fragment::HASH160: {
                     std::vector<unsigned char> preimage;
                     Availability avail = ctx.SatHASH160(node.data, preimage);
-                    return {ZERO32, InputStack(std::move(preimage)).SetAvailable(avail)};
+                    return {ZERO32, InputStack::MakeSingle(/*data=*/std::move(preimage), /*avail=*/avail)};
                 }
                 case Fragment::AND_V: {
                     auto& x = subres[0], &y = subres[1];

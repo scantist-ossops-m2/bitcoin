@@ -293,21 +293,29 @@ size_t ComputeScriptLen(Fragment fragment, Type sub0typ, size_t subsize, uint32_
     assert(false);
 }
 
-InputStack& InputStack::SetAvailable(Availability avail) {
-    available = avail;
-    if (avail == Availability::NO) {
-        stack.clear();
-        size = std::numeric_limits<size_t>::max();
-        has_sig = false;
-        malleable = false;
-        non_canon = false;
-    }
-    return *this;
+InputStack InputStack::MakeUnavailable() noexcept
+{
+    InputStack stack;
+    stack.available = Availability::NO;
+    stack.size = std::numeric_limits<size_t>::max();
+    return stack;
 }
 
-InputStack& InputStack::SetWithSig() {
-    has_sig = true;
-    return *this;
+InputStack InputStack::MakeEmpty() noexcept
+{
+    InputStack stack;
+    return stack;
+}
+
+InputStack InputStack::MakeSingle(std::vector<unsigned char> data, Availability avail, bool has_signature) noexcept
+{
+    if (avail == Availability::NO) return MakeUnavailable();
+    InputStack stack;
+    stack.available = avail;
+    stack.size = 1 + data.size();
+    stack.has_sig = has_signature;
+    stack.stack.push_back(std::move(data));
+    return stack;
 }
 
 InputStack& InputStack::SetNonCanon() {
@@ -326,10 +334,12 @@ InputStack operator+(InputStack a, InputStack b) {
     a.has_sig |= b.has_sig;
     a.malleable |= b.malleable;
     a.non_canon |= b.non_canon;
-    if (a.available == Availability::NO || b.available == Availability::NO) {
-        a.SetAvailable(Availability::NO);
+    if (a.available == Availability::NO) {
+        return a;
+    } else if (b.available == Availability::NO) {
+        return b;
     } else if (a.available == Availability::MAYBE || b.available == Availability::MAYBE) {
-        a.SetAvailable(Availability::MAYBE);
+        a.available = Availability::MAYBE;
     }
     return a;
 }
