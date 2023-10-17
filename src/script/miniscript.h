@@ -962,8 +962,14 @@ private:
             case Fragment::OR_I: {
                 const auto count{3 + subs[0]->ops.count + subs[1]->ops.count};
                 const auto sat{subs[0]->ops.sat | subs[1]->ops.sat};
-                const auto dsat{subs[0]->ops.dsat | subs[1]->ops.dsat};
-                return {count, sat, dsat};
+                // OR_I has two canonical dissatisfactions. Which one will be used can be inferred from the type system.
+                bool can_s0 = subs[0]->GetType() << "e"_mst && subs[1]->GetType() << "f"_mst;
+                bool can_s1 = subs[1]->GetType() << "e"_mst && subs[0]->GetType() << "f"_mst;
+                Assume(!(can_s0 && can_s1));
+                if (!can_s0 && !can_s1) return {count, sat, subs[0]->ops.dsat | subs[1]->ops.dsat};
+                if (can_s0) return {count, sat, subs[0]->ops.dsat};
+                Assume(can_s1);
+                return {count, sat, subs[1]->ops.dsat};
             }
             case Fragment::ANDOR: {
                 const auto count{3 + subs[0]->ops.count + subs[1]->ops.count + subs[2]->ops.count};
@@ -1056,7 +1062,15 @@ private:
             case Fragment::OR_I: {
                 const auto& x{subs[0]->ss};
                 const auto& y{subs[1]->ss};
-                return {SatInfo::If() + (x.sat | y.sat), SatInfo::If() + (x.dsat | y.dsat)};
+                // OR_I has two canonical dissatisfactions. Which one will be used can be inferred from the type system.
+                bool can_x = subs[0]->GetType() << "e"_mst && subs[1]->GetType() << "f"_mst;
+                bool can_y = subs[1]->GetType() << "e"_mst && subs[0]->GetType() << "f"_mst;
+                auto sat = SatInfo::If() + (x.sat | y.sat);
+                Assume(!(can_x && can_y));
+                if (!can_x && !can_y) return {sat, SatInfo::If() + (x.dsat | y.dsat)};
+                if (can_x) return {sat, SatInfo::If() + x.dsat};
+                Assume(can_y);
+                return {sat, SatInfo::If() + y.dsat};
             }
             // multi(k, key1, key2, ..., key_n) starts off with k+1 stack elements (a 0, plus k
             // signatures), then reaches n+k+3 stack elements after pushing the n keys, plus k and
@@ -1140,7 +1154,17 @@ private:
             }
             case Fragment::OR_C: return {subs[0]->ws.sat | (subs[0]->ws.dsat + subs[1]->ws.sat), {}};
             case Fragment::OR_D: return {subs[0]->ws.sat | (subs[0]->ws.dsat + subs[1]->ws.sat), subs[0]->ws.dsat + subs[1]->ws.dsat};
-            case Fragment::OR_I: return {(subs[0]->ws.sat + 1 + 1) | (subs[1]->ws.sat + 1), (subs[0]->ws.dsat + 1 + 1) | (subs[1]->ws.dsat + 1)};
+            case Fragment::OR_I: {
+                // OR_I has two canonical dissatisfactions. Which one will be used can be inferred from the type system.
+                bool can_s0 = subs[0]->GetType() << "e"_mst && subs[1]->GetType() << "f"_mst;
+                bool can_s1 = subs[1]->GetType() << "e"_mst && subs[0]->GetType() << "f"_mst;
+                Assume(!(can_s0 && can_s1));
+                auto sat = (subs[0]->ws.sat + 1 + 1) | (subs[1]->ws.sat + 1);
+                if (!can_s0 && !can_s1) return {sat, (subs[0]->ws.dsat + 1 + 1) | (subs[1]->ws.dsat + 1)};
+                if (can_s0) return {sat, subs[0]->ws.dsat + 1 + 1};
+                Assume(can_s1);
+                return {sat, subs[1]->ws.dsat + 1};
+            }
             case Fragment::MULTI: return {k * sig_size + 1, k + 1};
             case Fragment::MULTI_A: return {k * sig_size + static_cast<uint32_t>(keys.size()) - k, static_cast<uint32_t>(keys.size())};
             case Fragment::WRAP_A:
