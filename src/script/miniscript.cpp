@@ -315,8 +315,8 @@ InputStack& InputStack::SetNonCanon() {
     return *this;
 }
 
-InputStack& InputStack::SetMalleable(bool x) {
-    malleable = x;
+InputStack& InputStack::SetMalleable() {
+    malleable = true;
     return *this;
 }
 

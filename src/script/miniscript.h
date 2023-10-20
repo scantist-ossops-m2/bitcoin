@@ -321,7 +321,7 @@ struct InputStack {
     //! Mark this input stack as non-canonical (known to not be necessary in non-malleable satisfactions).
     InputStack& SetNonCanon();
     //! Mark this input stack as malleable.
-    InputStack& SetMalleable(bool x = true);
+    InputStack& SetMalleable();
     //! Concatenate two input stacks.
     friend InputStack operator+(InputStack a, InputStack b);
     //! Choose between two potential input stacks.
@@ -1373,12 +1373,15 @@ private:
                 }
                 case Fragment::WRAP_J: {
                     auto &x = subres[0];
-                    // If a dissatisfaction with a nonzero top stack element exists, an alternative dissatisfaction exists.
-                    // As the dissatisfaction logic currently doesn't keep track of this nonzeroness property, and thus even
-                    // if a dissatisfaction with a top zero element is found, we don't know whether another one with a
-                    // nonzero top stack element exists. Make the conservative assumption that whenever the subexpression is weakly
-                    // dissatisfiable, this alternative dissatisfaction exists and leads to malleability.
-                    return {InputStack(ZERO).SetMalleable(x.nsat.available != Availability::NO && !x.nsat.has_sig), std::move(x.sat)};
+                    // If a dissatisfaction of x with a nonzero top stack element exists, it can be used as an
+                    // alternative non-canonical dissatisfaction (in addition to the canonical ZERO). The ProduceInput
+                    // logic does however not track whether such a dissatisfaction is possible, and even if a
+                    // dissatisfaction with a top zero element is found, we don't know whether another one with a
+                    // nonzero top stack element may exist as well. To deal with this, make the conservative assumption
+                    // that all of x's dissatisfactions can directly be used, but consider them malleable. This way
+                    // they'll never be returned, as ZERO is always preferable (non-malleable and without signature).
+                    // However, if x.nsat does not need a signature it'll cause the result to be considered malleable.
+                    return {ZERO | x.nsat.SetMalleable().SetNonCanon(), std::move(x.sat)};
                 }
                 case Fragment::WRAP_V: {
                     auto &x = subres[0];
