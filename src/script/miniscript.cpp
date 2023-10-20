@@ -300,10 +300,17 @@ InputStack InputStack::MakeUnavailable() noexcept
     return stack;
 }
 
-InputStack InputStack::MakeEmpty() noexcept
+InputStack InputStack::MakeEmpty(Availability avail) noexcept
 {
     InputStack stack;
-    stack.stack_data[InputStackType{/*hassig=*/false, /*ismal=*/false}.Index()] = InputStackData{};
+    if (avail == Availability::NO || avail == Availability::MAYBE) {
+        // Unavailability is possible if unavailable, or when it is uncertain.
+        stack.stack_data[InputStackType{}.Index()] = InputStackData{};
+    }
+    if (avail == Availability::YES || avail == Availability::MAYBE) {
+        // Availability is possible if available, or when it is uncertain.
+        stack.stack_data[InputStackType{/*hassig=*/false, /*ismal=*/false}.Index()] = InputStackData{};
+    }
     return stack;
 }
 

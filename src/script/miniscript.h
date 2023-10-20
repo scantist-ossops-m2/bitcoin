@@ -354,7 +354,7 @@ struct InputStack {
     //! Construct a stack consisting of a single element.
     static InputStack MakeSingle(std::vector<unsigned char> data, Availability avail = Availability::YES, bool has_signature = false) noexcept;
     //! Construct an empty stack.
-    static InputStack MakeEmpty() noexcept;
+    static InputStack MakeEmpty(Availability avail = Availability::YES) noexcept;
     //! Mark this input stack as non-canonical (known to not be necessary in non-malleable satisfactions).
     InputStack& SetNonCanon();
 
@@ -1400,10 +1400,10 @@ private:
                     return {std::move(nsat), std::move(sats[node.k])};
                 }
                 case Fragment::OLDER: {
-                    return {INVALID, ctx.CheckOlder(node.k) ? EMPTY : INVALID};
+                    return {INVALID, InputStack::MakeEmpty(/*avail=*/ctx.CheckOlder(node.k))};
                 }
                 case Fragment::AFTER: {
-                    return {INVALID, ctx.CheckAfter(node.k) ? EMPTY : INVALID};
+                    return {INVALID, InputStack::MakeEmpty(/*avail=*/ctx.CheckAfter(node.k))};
                 }
                 case Fragment::SHA256: {
                     std::vector<unsigned char> preimage;

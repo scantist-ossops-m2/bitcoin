@@ -203,13 +203,15 @@ struct Satisfier : public KeyConverter {
     std::set<Challenge> supported;
 
     //! Implement simplified CLTV logic: stack value must exactly match an entry in `supported`.
-    bool CheckAfter(uint32_t value) const {
-        return supported.count(Challenge(ChallengeType::AFTER, value));
+    miniscript::Availability CheckAfter(uint32_t value) const {
+        if (supported.count(Challenge(ChallengeType::AFTER, value))) return miniscript::Availability::YES;
+        return miniscript::Availability::NO;
     }
 
     //! Implement simplified CSV logic: stack value must exactly match an entry in `supported`.
-    bool CheckOlder(uint32_t value) const {
-        return supported.count(Challenge(ChallengeType::OLDER, value));
+    miniscript::Availability CheckOlder(uint32_t value) const {
+        return supported.count(Challenge(ChallengeType::OLDER, value))) return miniscript::Availability::YES;
+        return miniscript::Availability::NO;
     }
 
     //! Produce a signature for the given key.
@@ -279,12 +281,12 @@ public:
 
     bool CheckLockTime(const CScriptNum& locktime) const override {
         // Delegate to Satisfier.
-        return ctx.CheckAfter(locktime.GetInt64());
+        return ctx.CheckAfter(locktime.GetInt64()) == miniscript::Availability::YES;
     }
 
     bool CheckSequence(const CScriptNum& sequence) const override {
         // Delegate to Satisfier.
-        return ctx.CheckOlder(sequence.GetInt64());
+        return ctx.CheckOlder(sequence.GetInt64()) == miniscript::Availability::YES;
     }
 };
 

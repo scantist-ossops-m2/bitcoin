@@ -242,8 +242,8 @@ struct SatisfierContext : ParserContext {
 
     // Timelock challenges satisfaction. Make the value (deterministically) vary to explore different
     // paths.
-    bool CheckAfter(uint32_t value) const { return value % 2; }
-    bool CheckOlder(uint32_t value) const { return value % 2; }
+    miniscript::Availability CheckAfter(uint32_t value) const { return value % 2 ? miniscript::Availability::YES : miniscript::Availability::NO; }
+    miniscript::Availability CheckOlder(uint32_t value) const { return value % 2 ? miniscript::Availability::YES : miniscript::Availability::NO; }
 
     // Signature challenges fulfilled with a dummy signature, if it was one of our dummy keys.
     miniscript::Availability Sign(const CPubKey& key, std::vector<unsigned char>& sig) const {
