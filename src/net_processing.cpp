@@ -5831,7 +5831,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                     size_t inbounds_nonrcncl_tx_relay = 0, outbounds_nonrcncl_tx_relay = 0;
                     const bool reconciles_txs = m_txreconciliation && m_txreconciliation->IsPeerRegistered(pto->GetId());
                     if (reconciles_txs) {
-                        for (auto [cur_peer_id, cur_peer] : m_peer_map) {
+                        for (const auto& [cur_peer_id, cur_peer] : m_peer_map) {
                             // Skip the source of the transaction.
                             if (cur_peer_id == pto->GetId()) continue;
                             const auto cur_state{State(cur_peer_id)};
@@ -5894,7 +5894,7 @@ bool PeerManagerImpl::SendMessages(CNode* pto)
                                 // sets for this one child is not good either.
                                 if ((*txiter)->GetCountWithDescendants() <= 1) {
                                     auto fanout_randomizer = m_connman.GetDeterministicRandomizer(RANDOMIZER_ID_FANOUTTARGET);
-                                    fanout = m_txreconciliation->ShouldFanoutTo(wtxid, fanout_randomizer, pto->GetId(),
+                                    fanout = m_txreconciliation->ShouldFanoutTo(wtxid, std::move(fanout_randomizer), pto->GetId(),
                                                                                 inbounds_nonrcncl_tx_relay, outbounds_nonrcncl_tx_relay);
                                 }
                             }

@@ -204,43 +204,40 @@ public:
         return IsPeerRegistered(peer_id);
     }
 
-    std::set<NodeId> GetFanoutTargets(CSipHasher& deterministic_randomizer_with_wtxid,
-                                      bool we_initiate, double limit) const EXCLUSIVE_LOCKS_REQUIRED(m_txreconciliation_mutex)
+    bool GetFanoutTargets(const CSipHasher& deterministic_randomizer_with_wtxid,
+                                      bool we_initiate, double limit, NodeId peer_id) const EXCLUSIVE_LOCKS_REQUIRED(m_txreconciliation_mutex)
     {
         // The algorithm works as follows. We iterate through the peers (of a given direction)
         // hashing them with the given wtxid, and sort them by this hash.
         // We then consider top `limit` peers to be low-fanout flood targets.
         // The randomness should be seeded with wtxid to return consistent results for every call.
 
-        double integral_part;
-        double fractional_part = std::modf(limit, &integral_part);
-        // Handle fractional value.
-        const bool add_extra = deterministic_randomizer_with_wtxid.Finalize() < fractional_part * double(UINT64_MAX);
-        const size_t targets_size = add_extra ? size_t(integral_part) + 1 : size_t(integral_part);
+        const size_t targets_size = ((deterministic_randomizer_with_wtxid.Finalize() & 0xFFFFFFFF) + uint64_t(limit * 0x100000000)) >> 32;
 
-        auto cmp_by_key = [](const std::pair<uint64_t, NodeId>& left, const std::pair<uint64_t, NodeId>& right) {
+        static constexpr auto cmp_by_key = [](const auto& left, const auto& right) {
             return left.first > right.first;
         };
 
-        std::set<std::pair<uint64_t, NodeId>, decltype(cmp_by_key)> best_peers(cmp_by_key);
+        std::vector<std::pair<uint64_t, NodeId>> best_peers;
+        best_peers.reserve(m_states.size());
 
-        for (auto indexed_state : m_states) {
+        for (const auto& indexed_state : m_states) {
             const auto cur_state = std::get_if<TxReconciliationState>(&indexed_state.second);
             if (cur_state && cur_state->m_we_initiate == we_initiate) {
                 uint64_t hash_key = CSipHasher(deterministic_randomizer_with_wtxid).Write(cur_state->m_k0).Finalize();
-                best_peers.insert(std::make_pair(hash_key, indexed_state.first));
+                best_peers.emplace_back(hash_key, indexed_state.first);
             }
         }
+        std::sort(best_peers.begin(), best_peers.end(), cmp_by_key);
 
-        std::set<NodeId> result;
         auto it = best_peers.begin();
         for (size_t i = 0; i < targets_size && it != best_peers.end(); ++i, ++it) {
-            result.insert(it->second);
+            if (it->second == peer_id) return true;
         }
-        return result;
+        return false;
     }
 
-    bool ShouldFanoutTo(const Wtxid& wtxid, CSipHasher deterministic_randomizer, NodeId peer_id,
+    bool ShouldFanoutTo(const Wtxid& wtxid, CSipHasher&& deterministic_randomizer, NodeId peer_id,
                         size_t inbounds_nonrcncl_tx_relay, size_t outbounds_nonrcncl_tx_relay)
         const EXCLUSIVE_LOCKS_REQUIRED(!m_txreconciliation_mutex)
     {
@@ -261,7 +258,7 @@ public:
             destinations = OUTBOUND_FANOUT_DESTINATIONS - outbounds_nonrcncl_tx_relay;
         } else {
             const size_t inbound_rcncl_peers = std::count_if(m_states.begin(), m_states.end(),
-                                                             [](std::pair<NodeId, std::variant<uint64_t, TxReconciliationState>> indexed_state) {
+                                                             [](const auto& indexed_state) {
                                                                  const auto* cur_state = std::get_if<TxReconciliationState>(&indexed_state.second);
                                                                  if (cur_state) return !cur_state->m_we_initiate;
                                                                  return false;
@@ -283,8 +280,7 @@ public:
         // thus making sure that no transaction gets "unlucky" if every per-peer roll fails.
         deterministic_randomizer.Write(wtxid.ToUint256());
 
-        auto fanout_candidates = GetFanoutTargets(deterministic_randomizer, recon_state.m_we_initiate, destinations);
-        return fanout_candidates.find(peer_id) != fanout_candidates.end();
+        return GetFanoutTargets(std::move(deterministic_randomizer), recon_state.m_we_initiate, destinations, peer_id);
     }
 };
 
@@ -323,9 +319,9 @@ bool TxReconciliationTracker::IsPeerRegistered(NodeId peer_id) const
     return m_impl->IsPeerRegisteredExternal(peer_id);
 }
 
-bool TxReconciliationTracker::ShouldFanoutTo(const Wtxid& wtxid, CSipHasher deterministic_randomizer, NodeId peer_id,
+bool TxReconciliationTracker::ShouldFanoutTo(const Wtxid& wtxid, CSipHasher&& deterministic_randomizer, NodeId peer_id,
                                              size_t inbounds_nonrcncl_tx_relay, size_t outbounds_nonrcncl_tx_relay) const
 {
-    return m_impl->ShouldFanoutTo(wtxid, deterministic_randomizer, peer_id,
+    return m_impl->ShouldFanoutTo(wtxid, std::move(deterministic_randomizer), peer_id,
                                   inbounds_nonrcncl_tx_relay, outbounds_nonrcncl_tx_relay);
 }

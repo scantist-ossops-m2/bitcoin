@@ -102,7 +102,7 @@ public:
     /**
      * Returns whether the peer is chosen as a low-fanout destination for a given tx.
      */
-    bool ShouldFanoutTo(const Wtxid& wtxid, CSipHasher deterministic_randomizer, NodeId peer_id,
+    bool ShouldFanoutTo(const Wtxid& wtxid, CSipHasher&& deterministic_randomizer, NodeId peer_id,
                         size_t inbounds_nonrcncl_tx_relay, size_t outbounds_nonrcncl_tx_relay) const;
 };
 
