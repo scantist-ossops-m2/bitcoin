@@ -394,9 +394,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             }
         }
 
-        // Only if any transactions with feefrac better than inc_feefrac exist add this entry to the
-        // queue. If not, it is unimprovable, and it is not worth exploring further.
-        if (pot_feefrac == inc_feefrac) return;
+        // If no potential transactions exist beyond the already included ones, no improvement
+        // is possible anymore.
+        if (pot == inc) return;
 
         // Construct a new work item in one of the queues, in a round-robin fashion, and update
         // statistics.
