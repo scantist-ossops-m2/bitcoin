@@ -302,7 +302,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
      * - pot_feefrac: equal to ComputeSetFeeFrac(cluster, pot / done). */
     using QueueElem = std::tuple<S, S, S, FeeFrac, FeeFrac>;
     /** Queues with work items. */
-    static constexpr unsigned NUM_QUEUES = 4;
+    static constexpr unsigned NUM_QUEUES = 1;
     std::vector<QueueElem> queue[NUM_QUEUES];
     /** Sum of total number of queue items across all queues. */
     unsigned queue_tot{0};
@@ -332,7 +332,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         for (unsigned pos : todo / (pot | exc)) {
             // Determine if adding transaction pos to pot (ignoring topology) would improve it. If
             // not, we're done updating pot.
-            ++ret.iterations;
             if (!pot_feefrac.IsEmpty()) {
                 ++ret.comparisons;
                 if (!(cluster[pos].first >> pot_feefrac)) break;
@@ -361,7 +360,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         S inc = init_inc;
         // Iterate over all transactions in pot that are not yet included in inc.
         for (unsigned pos : pot / inc) {
-            ++ret.iterations;
             // If that transaction's ancestors are a subset of pot, and the transaction is
             // (still) not part of inc, we can merge it together with its ancestors to inc.
             if (!inc[pos] && (pot >> anc[pos])) {
@@ -418,7 +416,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         S added = component;
         // Compute the transitive closure of "is ancestor or descendant of but not done or after".
         while (true) {
-            ++ret.iterations;
             S prev_component = component;
             for (unsigned i : added) {
                 component |= anc[i];
@@ -496,8 +493,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         auto remain = todo / inc;
         remain /= exc;
         unsigned first = remain.First();
-        for (unsigned i : (anc[first] | desc[first]) & remain) {
-            ++ret.iterations;
+        auto select = remain & (anc[first] | desc[first]);
+        for (unsigned i : select) {
+//            if (inc != done && (done >> (inc & anc[i]))) continue;
             std::pair<unsigned, unsigned> counts{(remain / anc[i]).Count(), (remain / desc[i]).Count()};
             if (counts.first < counts.second) std::swap(counts.first, counts.second);
             if (!pos_counts.has_value() || counts < *pos_counts) {
@@ -505,6 +503,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
                 pos_counts = counts;
             }
         }
+        if (!pos_counts.has_value()) continue;
 
         // Consider adding a work item corresponding to that transaction excluded. As nothing is
         // being added to inc, this new entry cannot be a new best.

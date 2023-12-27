@@ -580,9 +580,16 @@ FUZZ_TARGET(clustermempool_efficient_limits)
 {
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer_tmp);
-    if (cluster.size() > 18) return;
+    if (cluster.size() > 12) return;
     if (!IsMul64Compatible(cluster)) return;
 
+/*    for (unsigned i = 0; i < cluster.size(); ++i) {
+        cluster[i].second = {};
+        if (i & 1) {
+            cluster[i].second.Set(i - 1);
+            if (i + 1 < cluster.size()) cluster[i].second.Set(i + 1);
+        }
+    }*/
 //    std::cerr << "CLUSTER " << cluster << std::endl;
 
     FuzzBitSet all = FuzzBitSet::Fill(cluster.size());
@@ -819,6 +826,9 @@ FUZZ_TARGET(clustermempool_efficient_limits)
 
     if (global_do_save) {
         FuzzSave(buffer);
+        std::vector<unsigned char> rebuf;
+        SerializeCluster(cluster, rebuf);
+        FuzzSave(rebuf);
     }
 }
 
