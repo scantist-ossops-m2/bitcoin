@@ -188,11 +188,11 @@ public:
     const FeeFrac& operator[](unsigned i) const noexcept { return m_anc_feefracs[i]; }
 };
 
-/** Precomputation data structure for sorting a cluster based on individual transaction FeeFrac. */
+/** Precomputation data structure for reordering a cluster based on a provided order. */
 template<typename S>
-struct SortedCluster
+struct ReorderedCluster
 {
-    /** The cluster in individual FeeFrac sorted order (both itself and its dependencies) */
+    /** The reordered cluster (both itself and its dependencies) */
     Cluster<S> cluster;
     /** Mapping from the original order (input to constructor) to sorted order. */
     std::vector<unsigned> original_to_sorted;
@@ -215,21 +215,13 @@ struct SortedCluster
         return ret;
     }
 
-    /** Construct a sorted cluster object given a (non-sorted) cluster as input. */
-    SortedCluster(const Cluster<S>& orig_cluster)
+    /** Construct a reordered cluster object given a (non-sorted) cluster as input. */
+    ReorderedCluster(const Cluster<S>& orig_cluster, std::vector<unsigned> order)
     {
         // Allocate vectors.
-        sorted_to_original.resize(orig_cluster.size());
-        original_to_sorted.resize(orig_cluster.size());
-        cluster.resize(orig_cluster.size());
-        // Compute sorted_to_original mapping.
-        std::iota(sorted_to_original.begin(), sorted_to_original.end(), 0U);
-        std::sort(sorted_to_original.begin(), sorted_to_original.end(), [&](unsigned i, unsigned j) {
-            if (orig_cluster[i].first == orig_cluster[j].first) {
-                return i < j;
-            }
-            return orig_cluster[i].first > orig_cluster[j].first;
-        });
+        sorted_to_original = std::move(order);
+        original_to_sorted.resize(sorted_to_original.size());
+        cluster.resize(sorted_to_original.size());
         // Use sorted_to_original to fill original_to_sorted.
         for (size_t i = 0; i < orig_cluster.size(); ++i) {
             original_to_sorted[sorted_to_original[i]] = i;
@@ -240,6 +232,29 @@ struct SortedCluster
             cluster[i].second = OriginalToSorted(orig_cluster[sorted_to_original[i]].second);
         }
     }
+};
+
+/** Precomputation data structure for sorting a cluster based on individual transaction FeeFrac. */
+template<typename S>
+struct SortedCluster : public ReorderedCluster<S>
+{
+private:
+    static std::vector<unsigned> SortMapping(const Cluster<S>& orig_cluster)
+    {
+        std::vector<unsigned> sorted_to_original(orig_cluster.size());
+        // Compute sorted_to_original mapping.
+        std::iota(sorted_to_original.begin(), sorted_to_original.end(), 0U);
+        std::sort(sorted_to_original.begin(), sorted_to_original.end(), [&](unsigned i, unsigned j) {
+            if (orig_cluster[i].first == orig_cluster[j].first) {
+                return i < j;
+            }
+            return orig_cluster[i].first > orig_cluster[j].first;
+        });
+        return sorted_to_original;
+    }
+
+public:
+    SortedCluster(const Cluster<S>& orig_cluster) : ReorderedCluster<S>(orig_cluster, SortMapping(orig_cluster)) {}
 };
 
 /** Given a cluster and its ancestor sets, find the one with the best FeeFrac. */
