@@ -603,12 +603,11 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
      * - exc: excluded set of transactions for new item; must include after and own descendants.
      * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
      */
-    auto add_fn = [&](const S& init_inc, const S& exc, FeeFrac&& inc_feefrac) {
-        S inc = init_inc;
-        S pot = init_inc;
+    auto add_fn = [&](S inc, const S& exc, FeeFrac inc_feefrac) {
+        S pot = inc;
+        S pot_anc = inc;
         FeeFrac pot_feefrac = inc_feefrac;
-        S pot_anc = init_inc;
-        S undecided = todo / (init_inc | exc);
+        S undecided = todo / (pot | exc);
 
         S roots;
         for (unsigned und_idx : undecided) {
@@ -687,7 +686,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         // If no potential transactions exist beyond the already included ones, no improvement
         // is possible anymore.
         if (pot == inc) return;
-        assert(first_uninc_root.has_value());
+        if (!first_uninc_root.has_value()) first_uninc_root = (pot / inc).First();
 
         // Construct a new work item in one of the queues, in a round-robin fashion, and update
         // statistics.
@@ -780,12 +779,12 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         if (!pos_counts.has_value()) continue;
 
         // Consider adding a work item corresponding to that transaction excluded.
-        add_fn(inc, exc | desc[pos], FeeFrac{inc_feefrac});
+        add_fn(inc, exc | desc[pos], inc_feefrac);
 
         // Consider adding a work item corresponding to that transaction included.
         inc_feefrac += ComputeSetFeeFrac(cluster, anc[pos] / inc);
         inc |= anc[pos];
-        add_fn(inc, exc, std::move(inc_feefrac));
+        add_fn(std::move(inc), std::move(exc), std::move(inc_feefrac));
     }
 
     // Return the best seen candidate set.

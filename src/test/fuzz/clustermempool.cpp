@@ -580,7 +580,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
 {
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer_tmp);
-    if (cluster.size() > 18) return;
+    if (cluster.size() > 15) return;
     if (!IsMul64Compatible(cluster)) return;
 
 #if 0
@@ -632,7 +632,11 @@ FUZZ_TARGET(clustermempool_efficient_limits)
         if (single_viable) {
             ret.best_candidate_set.Set(*single_viable);
         } else {
+#if 1
             ret = FindBestCandidateSetFancy(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
+#else
+            ret = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
+#endif
             // Sanity checks
             // - connectedness of candidate
             assert(IsConnectedSubset(sorted.cluster, ret.best_candidate_set));
@@ -649,7 +653,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
         unsigned left = (all / done).Count();
         // - if small enough, matches exhaustive search FeeFrac
 #if 1
-        if (left <= 10 && !single_viable) {
+        if (left <= 18 && !single_viable) {
             auto ret_exhaustive = FindBestCandidateSetExhaustive(sorted.cluster, anc, done, {});
             assert(ret_exhaustive.best_candidate_feefrac == ret.best_candidate_feefrac);
         }
