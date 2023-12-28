@@ -580,22 +580,31 @@ FUZZ_TARGET(clustermempool_efficient_limits)
 {
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer_tmp);
-    if (cluster.size() > 14) return;
+    if (cluster.size() > 18) return;
     if (!IsMul64Compatible(cluster)) return;
 
-/*    for (unsigned i = 0; i < cluster.size(); ++i) {
+#if 0
+    for (unsigned i = 0; i < cluster.size(); ++i) {
         cluster[i].second = {};
         if (i & 1) {
             cluster[i].second.Set(i - 1);
             if (i + 1 < cluster.size()) cluster[i].second.Set(i + 1);
         }
-    }*/
+    }
+#endif
 //    std::cerr << "CLUSTER " << cluster << std::endl;
 
     FuzzBitSet all = FuzzBitSet::Fill(cluster.size());
     bool connected = IsConnectedSubset(cluster, all);
 
+#if 1
+    auto prelin = LinearizeCluster(cluster, 0, 0).linearization;
+    PostLinearization(cluster, prelin);
+    ReorderedCluster<FuzzBitSet> sorted(cluster, prelin);
+#else
     SortedCluster<FuzzBitSet> sorted(cluster);
+#endif
+
     AncestorSets<FuzzBitSet> anc(sorted.cluster);
     if (!IsAcyclic(anc)) return;
     DescendantSets<FuzzBitSet> desc(anc);
@@ -623,7 +632,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
         if (single_viable) {
             ret.best_candidate_set.Set(*single_viable);
         } else {
-            ret = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
+            ret = FindBestCandidateSetFancy(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
             // Sanity checks
             // - connectedness of candidate
             assert(IsConnectedSubset(sorted.cluster, ret.best_candidate_set));

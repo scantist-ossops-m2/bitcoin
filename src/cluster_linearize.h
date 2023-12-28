@@ -546,6 +546,254 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
     return ret;
 }
 
+template<typename S>
+CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, const AncestorSets<S>& anc, const DescendantSets<S>& desc, const AncestorSetFeeFracs<S>& anc_feefracs, const S& done, const S& after, uint64_t seed)
+{
+    /** Data structure with aggregated results. */
+    CandidateSetAnalysis<S> ret;
+    /** The set of all undecided transactions (everything except done or after). */
+    auto todo = S::Fill(cluster.size()) / (done | after);
+    // Bail out quickly if we're given a (remaining) cluster that is empty.
+    if (todo.None()) return ret;
+
+    /** Type for work queue items.
+     *
+     * Each consists of:
+     * - inc: bitset of transactions definitely included. For every transaction in it, all its
+     *        ancestors are also in it. This always includes done.
+     * - exc: bitset of transactions definitely excluded. For every transaction in it, all its
+     *        descendants are also in it. This always includes after.
+     * - pot
+     * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
+     * - pot_feefrac: upper bound on how good this element can get.
+     * - next_split: set to consider for next transaction split. */
+    using QueueElem = std::tuple<S, S, S, FeeFrac, FeeFrac, S>;
+    /** Queues with work items. */
+    static constexpr unsigned NUM_QUEUES = 1;
+    std::vector<QueueElem> queue[NUM_QUEUES];
+    /** Sum of total number of queue items across all queues. */
+    unsigned queue_tot{0};
+    /** Very fast local random number generator. */
+    XoRoShiRo128PlusPlus rng(seed);
+    /** The best found candidate set so far, including done. */
+    S best_candidate;
+    /** Equal to ComputeSetFeeFrac(cluster, best_candidate / done). */
+    FeeFrac best_feefrac;
+    /** The number of insertions so far into the queues in total. */
+    unsigned insert_count{0};
+
+    std::vector<std::pair<S, FeeFrac>> pot_roots(cluster.size());
+    std::vector<unsigned> pot_idx(cluster.size());
+
+    auto low_pot_fn = [&](unsigned a, unsigned b) {
+        if (pot_roots[a].second < pot_roots[b].second) return true;
+        if (pot_roots[a].second > pot_roots[b].second) return false;
+        return a > b;
+    };
+
+    auto high_pot_fn = [&](unsigned a, unsigned b) {
+        if (pot_roots[a].second > pot_roots[b].second) return true;
+        if (pot_roots[a].second < pot_roots[b].second) return false;
+        return b > a;
+    };
+
+    /** Internal add function.
+     *
+     * - inc: included set of transactions for new item; must include done and own ancestors.
+     * - exc: excluded set of transactions for new item; must include after and own descendants.
+     * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
+     */
+    auto add_fn = [&](const S& init_inc, const S& exc, FeeFrac&& inc_feefrac) {
+        S inc = init_inc;
+        S pot = init_inc;
+        FeeFrac pot_feefrac = inc_feefrac;
+        S pot_anc = init_inc;
+        S undecided = todo / (init_inc | exc);
+
+        S roots;
+        for (unsigned und_idx : undecided) {
+            S parents = roots & anc[und_idx];
+            roots.Set(und_idx);
+            pot_roots[und_idx].first = {};
+            pot_roots[und_idx].first.Set(und_idx);
+            pot_roots[und_idx].second = cluster[und_idx].first;
+            unsigned num_par = 0;
+            for (unsigned par : parents) {
+                ++ret.comparisons;
+                if (pot_roots[par].second << pot_roots[und_idx].second) {
+                    pot_idx[num_par++] = par;
+                }
+            }
+            std::make_heap(pot_idx.begin(), pot_idx.begin() + num_par, high_pot_fn);
+            ret.comparisons += (num_par * 33 + 19) / 20;
+            bool modified = false;
+            while (num_par) {
+                unsigned par = pot_idx[0];
+                if (modified) {
+                    ++ret.comparisons;
+                    if (!(pot_roots[und_idx].second >> pot_roots[par].second)) break;
+                }
+                modified = true;
+                pot_roots[und_idx].first |= pot_roots[par].first;
+                pot_roots[und_idx].second += pot_roots[par].second;
+                roots.Reset(par);
+                std::pop_heap(pot_idx.begin(), pot_idx.begin() + num_par, high_pot_fn);
+                ret.comparisons += std::bit_width(num_par - 1);
+                --num_par;
+            }
+        }
+
+        unsigned num_roots = 0;
+        std::optional<unsigned> first_uninc_root;
+        for (unsigned root : roots) pot_idx[num_roots++] = root;
+        std::make_heap(pot_idx.begin(), pot_idx.begin() + num_roots, low_pot_fn);
+        ret.comparisons += (num_roots * 33 + 19) / 20;
+        while (num_roots) {
+            unsigned root = pot_idx[0];
+            if (!pot_feefrac.IsEmpty()) {
+                ++ret.comparisons;
+                if (!(pot_roots[root].second >> pot_feefrac)) break;
+            }
+            for (unsigned idx : pot_roots[root].first) {
+                pot_anc |= anc[idx];
+            }
+            pot |= pot_roots[root].first;
+            pot_feefrac += pot_roots[root].second;
+            if (pot_anc == pot) {
+                inc = pot;
+                inc_feefrac = pot_feefrac;
+                first_uninc_root = std::nullopt;
+            } else if (!first_uninc_root.has_value()) {
+                first_uninc_root = root;
+            }
+            std::pop_heap(pot_idx.begin(), pot_idx.begin() + num_roots, low_pot_fn);
+            ret.comparisons += std::bit_width(num_roots - 1);
+            --num_roots;
+        }
+
+        if (!inc_feefrac.IsEmpty()) {
+            ++ret.num_candidate_sets;
+            bool new_best = best_feefrac.IsEmpty();
+            if (!new_best) {
+                ++ret.comparisons;
+                new_best = inc_feefrac > best_feefrac;
+            }
+            if (new_best) {
+                best_feefrac = inc_feefrac;
+                best_candidate = inc;
+            }
+        }
+
+        // If no potential transactions exist beyond the already included ones, no improvement
+        // is possible anymore.
+        if (pot == inc) return;
+        assert(first_uninc_root.has_value());
+
+        // Construct a new work item in one of the queues, in a round-robin fashion, and update
+        // statistics.
+        queue[insert_count % NUM_QUEUES].emplace_back(std::move(inc), std::move(exc), std::move(pot), std::move(inc_feefrac), std::move(pot_feefrac), anc[*first_uninc_root] | desc[*first_uninc_root]);
+        ++insert_count;
+        ++queue_tot;
+        ret.max_queue_size = std::max<size_t>(ret.max_queue_size, queue_tot);
+    };
+
+    // Find connected components of the cluster, and add queue entries for each which exclude all
+    // the other components. This prevents the search further down from considering candidates
+    // that span multiple components (as those are necessarily suboptimal).
+    auto to_cover = todo;
+    while (true) {
+        ++ret.iterations;
+        // Start with one transaction that hasn't been covered with connected components yet.
+        S component;
+        component.Set(to_cover.First());
+        S added = component;
+        // Compute the transitive closure of "is ancestor or descendant of but not done or after".
+        while (true) {
+            S prev_component = component;
+            for (unsigned i : added) {
+                component |= anc[i];
+                component |= desc[i];
+            }
+            component /= done;
+            component /= after;
+            if (prev_component == component) break;
+            added = component / prev_component;
+        }
+        // Add queue entries, one for each component with every other component excluded.
+        add_fn(done, after | (todo / component), {});
+        // Update the set of transactions to cover, and finish if there are none left.
+        to_cover /= component;
+        if (to_cover.None()) break;
+    }
+
+    // Work processing loop.
+    while (queue_tot) {
+        ++ret.iterations;
+
+        // Find a queue to pop a work item from.
+        unsigned queue_idx;
+        do {
+            queue_idx = rng() % NUM_QUEUES;
+        } while (queue[queue_idx].empty());
+
+        // If this item's potential feefrac is not better than the best seen so far, drop it.
+        const auto& pot_feefrac_ref = std::get<4>(queue[queue_idx].back());
+#if DEBUG_LINEARIZE
+        assert(pot_feefrac_ref.size > 0);
+#endif
+        if (!best_feefrac.IsEmpty()) {
+            ++ret.comparisons;
+            if (pot_feefrac_ref <= best_feefrac) {
+                queue[queue_idx].pop_back();
+                --queue_tot;
+                continue;
+            }
+        }
+
+        // Move the work item from the queue to local variables, popping it.
+        auto [inc, exc, pot, inc_feefrac, pot_feefrac, next_split] = std::move(queue[queue_idx].back());
+        queue[queue_idx].pop_back();
+        --queue_tot;
+
+        // Decide which transaction to split on (create new work items; one with it included, one
+        // with it excluded).
+        //
+        // Among the (undecided) ancestors and descendants of the best individual feefrac undecided
+        // transaction, pick the one which:
+        // - Minimizes the size of the largest of the undecided sets after including or excluding.
+        // - If the above is equal, the one that minimizes the other branch's undecided set size.
+        // - If the above are equal, the one with the best individual feefrac.
+        unsigned pos = 0;
+        std::optional<std::pair<unsigned, unsigned>> pos_counts;
+        auto remain = todo / inc;
+        remain /= exc;
+        auto select = remain & next_split;
+        assert(select.Any());
+        for (unsigned i : select) {
+            std::pair<unsigned, unsigned> counts{(remain / anc[i]).Count(), (remain / desc[i]).Count()};
+            if (counts.first < counts.second) std::swap(counts.first, counts.second);
+            if (!pos_counts.has_value() || counts < *pos_counts) {
+                pos = i;
+                pos_counts = counts;
+            }
+        }
+        if (!pos_counts.has_value()) continue;
+
+        // Consider adding a work item corresponding to that transaction excluded.
+        add_fn(inc, exc | desc[pos], FeeFrac{inc_feefrac});
+
+        // Consider adding a work item corresponding to that transaction included.
+        inc_feefrac += ComputeSetFeeFrac(cluster, anc[pos] / inc);
+        inc |= anc[pos];
+        add_fn(inc, exc, std::move(inc_feefrac));
+    }
+
+    // Return the best seen candidate set.
+    ret.best_candidate_set = best_candidate / done;
+    ret.best_candidate_feefrac = best_feefrac;
+    return ret;
+}
+
 struct LinearizationResult
 {
     std::vector<unsigned> linearization;
