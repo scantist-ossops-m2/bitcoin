@@ -563,11 +563,11 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
      *        ancestors are also in it. This always includes done.
      * - exc: bitset of transactions definitely excluded. For every transaction in it, all its
      *        descendants are also in it. This always includes after.
-     * - pot
      * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
      * - pot_feefrac: upper bound on how good this element can get.
-     * - next_split: set to consider for next transaction split. */
-    using QueueElem = std::tuple<S, S, S, FeeFrac, FeeFrac, S>;
+     * - pivot: transactions whose ancestors and descendants will be considered for next split
+     */
+    using QueueElem = std::tuple<S, S, FeeFrac, FeeFrac, unsigned>;
     /** Queues with work items. */
     static constexpr unsigned NUM_QUEUES = 1;
     std::vector<QueueElem> queue[NUM_QUEUES];
@@ -588,20 +588,23 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
     auto low_pot_fn = [&](unsigned a, unsigned b) {
         if (pot_roots[a].second < pot_roots[b].second) return true;
         if (pot_roots[a].second > pot_roots[b].second) return false;
-        return a > b;
+        return a < b;
     };
 
     auto high_pot_fn = [&](unsigned a, unsigned b) {
         if (pot_roots[a].second > pot_roots[b].second) return true;
         if (pot_roots[a].second < pot_roots[b].second) return false;
-        return b > a;
+        return a < b;
     };
+
+    static constexpr unsigned SORT_COST[] = {0, 0, 2, 4, 6, 9, 13, 17, 21, 26, 32, 38, 44, 51, 59, 67, 75, 83, 90, 97, 103, 110, 117, 124, 131, 138, 145, 153, 160, 168, 175, 183, 190};
 
     /** Internal add function.
      *
      * - inc: included set of transactions for new item; must include done and own ancestors.
      * - exc: excluded set of transactions for new item; must include after and own descendants.
      * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
+     * - pivot: transactions whose ancestors/descendants will be considered for next split.
      */
     auto add_fn = [&](S inc, const S& exc, FeeFrac inc_feefrac) {
         S pot = inc;
@@ -617,57 +620,40 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
             pot_roots[und_idx].first.Set(und_idx);
             pot_roots[und_idx].second = cluster[und_idx].first;
             unsigned num_par = 0;
-            for (unsigned par : parents) {
+            for (unsigned par : parents) pot_idx[num_par++] = par;
+            std::sort(pot_idx.begin(), pot_idx.begin() + num_par, low_pot_fn);
+            ret.comparisons += SORT_COST[num_par];
+            for (unsigned p = 0; p < num_par; ++p) {
+                unsigned par = pot_idx[p];
                 ++ret.comparisons;
-                if (pot_roots[par].second << pot_roots[und_idx].second) {
-                    pot_idx[num_par++] = par;
-                }
-            }
-            std::make_heap(pot_idx.begin(), pot_idx.begin() + num_par, high_pot_fn);
-            ret.comparisons += (num_par * 33 + 19) / 20;
-            bool modified = false;
-            while (num_par) {
-                unsigned par = pot_idx[0];
-                if (modified) {
-                    ++ret.comparisons;
-                    if (!(pot_roots[und_idx].second >> pot_roots[par].second)) break;
-                }
-                modified = true;
+                if (!(pot_roots[und_idx].second >> pot_roots[par].second)) break;
                 pot_roots[und_idx].first |= pot_roots[par].first;
                 pot_roots[und_idx].second += pot_roots[par].second;
                 roots.Reset(par);
-                std::pop_heap(pot_idx.begin(), pot_idx.begin() + num_par, high_pot_fn);
-                ret.comparisons += std::bit_width(num_par - 1);
-                --num_par;
             }
         }
 
         unsigned num_roots = 0;
-        std::optional<unsigned> first_uninc_root;
+        std::optional<unsigned> pivot;
         for (unsigned root : roots) pot_idx[num_roots++] = root;
-        std::make_heap(pot_idx.begin(), pot_idx.begin() + num_roots, low_pot_fn);
-        ret.comparisons += (num_roots * 33 + 19) / 20;
-        while (num_roots) {
-            unsigned root = pot_idx[0];
+        std::sort(pot_idx.begin(), pot_idx.begin() + num_roots, high_pot_fn);
+        ret.comparisons += SORT_COST[num_roots];
+        for (unsigned r = 0; r < num_roots; ++r) {
+            unsigned root = pot_idx[r];
             if (!pot_feefrac.IsEmpty()) {
                 ++ret.comparisons;
                 if (!(pot_roots[root].second >> pot_feefrac)) break;
             }
-            for (unsigned idx : pot_roots[root].first) {
-                pot_anc |= anc[idx];
-            }
+            for (unsigned idx : pot_roots[root].first) pot_anc |= anc[idx];
             pot |= pot_roots[root].first;
             pot_feefrac += pot_roots[root].second;
             if (pot_anc == pot) {
                 inc = pot;
                 inc_feefrac = pot_feefrac;
-                first_uninc_root = std::nullopt;
-            } else if (!first_uninc_root.has_value()) {
-                first_uninc_root = root;
+                pivot = std::nullopt;
+            } else if (!pivot.has_value()) {
+                pivot = root;
             }
-            std::pop_heap(pot_idx.begin(), pot_idx.begin() + num_roots, low_pot_fn);
-            ret.comparisons += std::bit_width(num_roots - 1);
-            --num_roots;
         }
 
         if (!inc_feefrac.IsEmpty()) {
@@ -686,11 +672,11 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         // If no potential transactions exist beyond the already included ones, no improvement
         // is possible anymore.
         if (pot == inc) return;
-        if (!first_uninc_root.has_value()) first_uninc_root = (pot / inc).First();
+        assert(pivot.has_value());
 
         // Construct a new work item in one of the queues, in a round-robin fashion, and update
         // statistics.
-        queue[insert_count % NUM_QUEUES].emplace_back(std::move(inc), std::move(exc), std::move(pot), std::move(inc_feefrac), std::move(pot_feefrac), anc[*first_uninc_root] | desc[*first_uninc_root]);
+        queue[insert_count % NUM_QUEUES].emplace_back(std::move(inc), std::move(exc), std::move(inc_feefrac), std::move(pot_feefrac), *pivot);
         ++insert_count;
         ++queue_tot;
         ret.max_queue_size = std::max<size_t>(ret.max_queue_size, queue_tot);
@@ -736,7 +722,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         } while (queue[queue_idx].empty());
 
         // If this item's potential feefrac is not better than the best seen so far, drop it.
-        const auto& pot_feefrac_ref = std::get<4>(queue[queue_idx].back());
+        const auto& pot_feefrac_ref = std::get<3>(queue[queue_idx].back());
 #if DEBUG_LINEARIZE
         assert(pot_feefrac_ref.size > 0);
 #endif
@@ -750,23 +736,22 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         }
 
         // Move the work item from the queue to local variables, popping it.
-        auto [inc, exc, pot, inc_feefrac, pot_feefrac, next_split] = std::move(queue[queue_idx].back());
+        auto [inc, exc, inc_feefrac, pot_feefrac, pivot] = std::move(queue[queue_idx].back());
         queue[queue_idx].pop_back();
         --queue_tot;
 
         // Decide which transaction to split on (create new work items; one with it included, one
         // with it excluded).
         //
-        // Among the (undecided) ancestors and descendants of the best individual feefrac undecided
-        // transaction, pick the one which:
+        // Among the (undecided) ancestors and descendants of the first unincluded root, pick the one which:
         // - Minimizes the size of the largest of the undecided sets after including or excluding.
         // - If the above is equal, the one that minimizes the other branch's undecided set size.
-        // - If the above are equal, the one with the best individual feefrac.
+        // - If the above are equal, the first one in the cluster.
         unsigned pos = 0;
         std::optional<std::pair<unsigned, unsigned>> pos_counts;
         auto remain = todo / inc;
         remain /= exc;
-        auto select = remain & next_split;
+        auto select = remain & (anc[pivot] | desc[pivot]);
         assert(select.Any());
         for (unsigned i : select) {
             std::pair<unsigned, unsigned> counts{(remain / anc[i]).Count(), (remain / desc[i]).Count()};
