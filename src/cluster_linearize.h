@@ -14,6 +14,7 @@
 #include <optional>
 #include <vector>
 #include <tuple>
+#include <deque>
 
 #include <util/bitset.h>
 #include <util/feefrac.h>
@@ -570,7 +571,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
     using QueueElem = std::tuple<S, S, FeeFrac, FeeFrac, unsigned>;
     /** Queues with work items. */
     static constexpr unsigned NUM_QUEUES = 1;
-    std::vector<QueueElem> queue[NUM_QUEUES];
+    std::deque<QueueElem> queue[NUM_QUEUES];
     /** Sum of total number of queue items across all queues. */
     unsigned queue_tot{0};
     /** Very fast local random number generator. */
@@ -780,22 +781,22 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         } while (queue[queue_idx].empty());
 
         // If this item's potential feefrac is not better than the best seen so far, drop it.
-        const auto& pot_feefrac_ref = std::get<3>(queue[queue_idx].back());
+        const auto& pot_feefrac_ref = std::get<3>(queue[queue_idx].front());
 #if DEBUG_LINEARIZE
         assert(pot_feefrac_ref.size > 0);
 #endif
         if (!best_feefrac.IsEmpty()) {
             ++ret.comparisons;
             if (pot_feefrac_ref <= best_feefrac) {
-                queue[queue_idx].pop_back();
+                queue[queue_idx].pop_front();
                 --queue_tot;
                 continue;
             }
         }
 
         // Move the work item from the queue to local variables, popping it.
-        auto [inc, exc, inc_feefrac, pot_feefrac, pivot] = std::move(queue[queue_idx].back());
-        queue[queue_idx].pop_back();
+        auto [inc, exc, inc_feefrac, pot_feefrac, pivot] = std::move(queue[queue_idx].front());
+        queue[queue_idx].pop_front();
         --queue_tot;
 
         // Decide which transaction to split on (create new work items; one with it included, one
@@ -827,9 +828,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         add_fn(inc, exc | desc[pos], inc_feefrac);
 
         // Consider adding a work item corresponding to that transaction included.
-        inc_feefrac += ComputeSetFeeFrac(cluster, anc[pos] / inc);
-        inc |= anc[pos];
-        add_fn(std::move(inc), std::move(exc), std::move(inc_feefrac));
+        auto new_inc_feefrac = inc_feefrac + ComputeSetFeeFrac(cluster, anc[pos] / inc);
+        auto new_inc = inc | anc[pos];
+        add_fn(std::move(new_inc), std::move(exc), std::move(new_inc_feefrac));
     }
 
     // Return the best seen candidate set.
