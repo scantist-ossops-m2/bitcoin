@@ -618,7 +618,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
             if (!best_feefrac.IsEmpty()) {
                 S epot = exc;
                 S epot_desc = exc;
-                FeeFrac epot_feefrac = ComputeSetFeeFrac(cluster, epot / after);
 
                 S leafs;
                 unsigned leaf_order_len = undecided.Count();
@@ -657,7 +656,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                     if (!(pot_roots[leaf].second << best_feefrac)) break;
                     for (unsigned idx : pot_roots[leaf].first) epot_desc |= desc[idx];
                     epot |= pot_roots[leaf].first;
-                    epot_feefrac += pot_roots[leaf].second;
                     if (epot_desc == epot) {
                         exc = epot;
                     }
