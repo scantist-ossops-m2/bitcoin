@@ -605,9 +605,11 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
      * - inc: included set of transactions for new item; must include done and own ancestors.
      * - exc: excluded set of transactions for new item; must include after and own descendants.
      * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
-     * - pivot: transactions whose ancestors/descendants will be considered for next split.
      */
     auto add_fn = [&](S inc, S exc, FeeFrac inc_feefrac) {
+        assert(inc >> done);
+        assert(exc >> after);
+        assert(!(inc && exc));
         S undecided = todo / (inc | exc);
         FeeFrac pot_feefrac;
         std::optional<unsigned> pivot;
@@ -659,13 +661,29 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                 }
             }
             undecided /= inc;
+
+            if (!inc_feefrac.IsEmpty()) {
+                ++ret.num_candidate_sets;
+                bool new_best = best_feefrac.IsEmpty();
+                if (!new_best) {
+                    ++ret.comparisons;
+                    new_best = inc_feefrac > best_feefrac;
+                }
+                if (new_best) {
+                    best_feefrac = inc_feefrac;
+                    best_candidate = inc;
+                }
+            }
+
             // If no potential transactions exist beyond the already included ones, no improvement
             // is possible anymore.
             if (pot == inc) return;
 
-/*            S epot = exc;
+            if (exc == after) break;
+            S epot = exc;
             S epot_desc = exc;
             FeeFrac epot_feefrac = ComputeSetFeeFrac(cluster, epot / after);
+            bool modified = false;
 
             S leafs;
             unsigned leaf_order_len = undecided.Count();
@@ -694,13 +712,13 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                 }
             }
 
-            bool modified = false;
             unsigned num_leafs = 0;
             for (unsigned leaf : leafs) pot_idx[num_leafs++] = leaf;
             std::sort(pot_idx.begin(), pot_idx.begin() + num_leafs, high_pot_fn);
             ret.comparisons += SORT_COST[num_leafs];
             for (unsigned l = 0; l < num_leafs; ++l) {
                 unsigned leaf = pot_idx[num_leafs - 1 - l];
+                ++ret.comparisons;
                 if (!epot_feefrac.IsEmpty()) {
                     ++ret.comparisons;
                     if (!(pot_roots[leaf].second << epot_feefrac)) break;
@@ -714,25 +732,13 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                 }
             }
             undecided /= exc;
-            if (!modified) break;*/
-            break;
-        }
 
-        if (!inc_feefrac.IsEmpty()) {
-            ++ret.num_candidate_sets;
-            bool new_best = best_feefrac.IsEmpty();
-            if (!new_best) {
-                ++ret.comparisons;
-                new_best = inc_feefrac > best_feefrac;
-            }
-            if (new_best) {
-                best_feefrac = inc_feefrac;
-                best_candidate = inc;
-            }
+            if (!modified) break;
         }
 
         assert(pivot.has_value());
         assert(undecided[*pivot]);
+        assert(undecided == todo / (inc | exc));
 
         // Construct a new work item in one of the queues, in a round-robin fashion, and update
         // statistics.
@@ -822,6 +828,8 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
             }
         }
         if (!pos_counts.has_value()) continue;
+        assert(!inc[pos]);
+        assert(!exc[pos]);
 
         // Consider adding a work item corresponding to that transaction excluded.
         add_fn(inc, exc | desc[pos], inc_feefrac);

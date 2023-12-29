@@ -655,6 +655,9 @@ FUZZ_TARGET(clustermempool_efficient_limits)
 #if 1
         if (left <= 18 && !single_viable) {
             auto ret_exhaustive = FindBestCandidateSetExhaustive(sorted.cluster, anc, done, {});
+            if (ret_exhaustive.best_candidate_feefrac >> ret.best_candidate_feefrac) {
+                std::cerr << "CLUSTER " << sorted.cluster << " DONE=" << done << std::endl;
+            }
             assert(!(ret_exhaustive.best_candidate_feefrac << ret.best_candidate_feefrac) && !(ret_exhaustive.best_candidate_feefrac >> ret.best_candidate_feefrac));
         }
 #endif
