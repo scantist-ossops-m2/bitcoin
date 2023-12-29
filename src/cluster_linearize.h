@@ -614,7 +614,57 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         FeeFrac pot_feefrac;
         std::optional<unsigned> pivot;
 
-        while (true) {
+        {
+            if (!best_feefrac.IsEmpty()) {
+                S epot = exc;
+                S epot_desc = exc;
+                FeeFrac epot_feefrac = ComputeSetFeeFrac(cluster, epot / after);
+
+                S leafs;
+                unsigned leaf_order_len = undecided.Count();
+                for (unsigned und_idx : undecided) {
+                    leaf_order[--leaf_order_len] = und_idx;
+                }
+                leaf_order_len = undecided.Count();
+                for (unsigned leaf_order_pos = 0; leaf_order_pos < leaf_order_len; ++leaf_order_pos) {
+                    unsigned und_idx = leaf_order[leaf_order_pos];
+                    S children = leafs & desc[und_idx];
+                    leafs.Set(und_idx);
+                    pot_roots[und_idx].first = {};
+                    pot_roots[und_idx].first.Set(und_idx);
+                    pot_roots[und_idx].second = cluster[und_idx].first;
+                    unsigned num_chl = 0;
+                    for (unsigned chl : children) pot_idx[num_chl++] = chl;
+                    std::sort(pot_idx.begin(), pot_idx.begin() + num_chl, low_pot_fn);
+                    ret.comparisons += SORT_COST[num_chl];
+                    for (unsigned c = 0; c < num_chl; ++c) {
+                        unsigned chl = pot_idx[num_chl - 1 - c];
+                        ++ret.comparisons;
+                        if (!(pot_roots[und_idx].second << pot_roots[chl].second)) break;
+                        pot_roots[und_idx].first |= pot_roots[chl].first;
+                        pot_roots[und_idx].second += pot_roots[chl].second;
+                        leafs.Reset(chl);
+                    }
+                }
+
+                unsigned num_leafs = 0;
+                for (unsigned leaf : leafs) pot_idx[num_leafs++] = leaf;
+                std::sort(pot_idx.begin(), pot_idx.begin() + num_leafs, high_pot_fn);
+                ret.comparisons += SORT_COST[num_leafs];
+                for (unsigned l = 0; l < num_leafs; ++l) {
+                    unsigned leaf = pot_idx[num_leafs - 1 - l];
+                    ++ret.comparisons;
+                    if (!(pot_roots[leaf].second << best_feefrac)) break;
+                    for (unsigned idx : pot_roots[leaf].first) epot_desc |= desc[idx];
+                    epot |= pot_roots[leaf].first;
+                    epot_feefrac += pot_roots[leaf].second;
+                    if (epot_desc == epot) {
+                        exc = epot;
+                    }
+                }
+                undecided /= exc;
+            }
+
             S pot = inc;
             S pot_anc = inc;
             pot_feefrac = inc_feefrac;
@@ -678,62 +728,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
             // If no potential transactions exist beyond the already included ones, no improvement
             // is possible anymore.
             if (pot == inc) return;
-
-            if (exc == after) break;
-            S epot = exc;
-            S epot_desc = exc;
-            FeeFrac epot_feefrac = ComputeSetFeeFrac(cluster, epot / after);
-            bool modified = false;
-
-            S leafs;
-            unsigned leaf_order_len = undecided.Count();
-            for (unsigned und_idx : undecided) {
-                leaf_order[--leaf_order_len] = und_idx;
-            }
-            leaf_order_len = undecided.Count();
-            for (unsigned leaf_order_pos = 0; leaf_order_pos < leaf_order_len; ++leaf_order_pos) {
-                unsigned und_idx = leaf_order[leaf_order_pos];
-                S children = leafs & desc[und_idx];
-                leafs.Set(und_idx);
-                pot_roots[und_idx].first = {};
-                pot_roots[und_idx].first.Set(und_idx);
-                pot_roots[und_idx].second = cluster[und_idx].first;
-                unsigned num_chl = 0;
-                for (unsigned chl : children) pot_idx[num_chl++] = chl;
-                std::sort(pot_idx.begin(), pot_idx.begin() + num_chl, low_pot_fn);
-                ret.comparisons += SORT_COST[num_chl];
-                for (unsigned c = 0; c < num_chl; ++c) {
-                    unsigned chl = pot_idx[num_chl - 1 - c];
-                    ++ret.comparisons;
-                    if (!(pot_roots[und_idx].second << pot_roots[chl].second)) break;
-                    pot_roots[und_idx].first |= pot_roots[chl].first;
-                    pot_roots[und_idx].second += pot_roots[chl].second;
-                    leafs.Reset(chl);
-                }
-            }
-
-            unsigned num_leafs = 0;
-            for (unsigned leaf : leafs) pot_idx[num_leafs++] = leaf;
-            std::sort(pot_idx.begin(), pot_idx.begin() + num_leafs, high_pot_fn);
-            ret.comparisons += SORT_COST[num_leafs];
-            for (unsigned l = 0; l < num_leafs; ++l) {
-                unsigned leaf = pot_idx[num_leafs - 1 - l];
-                ++ret.comparisons;
-                if (!epot_feefrac.IsEmpty()) {
-                    ++ret.comparisons;
-                    if (!(pot_roots[leaf].second << epot_feefrac)) break;
-                }
-                for (unsigned idx : pot_roots[leaf].first) epot_desc |= desc[idx];
-                epot |= pot_roots[leaf].first;
-                epot_feefrac += pot_roots[leaf].second;
-                if (epot_desc == epot) {
-                    if (exc != epot) modified = true;
-                    exc = epot;
-                }
-            }
-            undecided /= exc;
-
-            if (!modified) break;
         }
 
         assert(pivot.has_value());
