@@ -594,10 +594,22 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         return a < b;
     };
 
+    auto low_pot_rev_fn = [&](unsigned a, unsigned b) {
+        if (pot_roots[a].second > pot_roots[b].second) return true;
+        if (pot_roots[a].second < pot_roots[b].second) return false;
+        return a > b;
+    };
+
     auto high_pot_fn = [&](unsigned a, unsigned b) {
         if (pot_roots[a].second > pot_roots[b].second) return true;
         if (pot_roots[a].second < pot_roots[b].second) return false;
         return a < b;
+    };
+
+    auto high_pot_rev_fn = [&](unsigned a, unsigned b) {
+        if (pot_roots[a].second < pot_roots[b].second) return true;
+        if (pot_roots[a].second > pot_roots[b].second) return false;
+        return a > b;
     };
 
     static constexpr unsigned SORT_COST[] = {0, 0, 2, 4, 6, 9, 13, 17, 21, 26, 32, 38, 44, 51, 59, 67, 75, 83, 90, 97, 103, 110, 117, 124, 131, 138, 145, 153, 160, 168, 175, 183, 190};
@@ -637,10 +649,10 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                     pot_roots[und_idx].second = cluster[und_idx].first;
                     unsigned num_chl = 0;
                     for (unsigned chl : children) pot_idx[num_chl++] = chl;
-                    std::sort(pot_idx.begin(), pot_idx.begin() + num_chl, low_pot_fn);
+                    std::sort(pot_idx.begin(), pot_idx.begin() + num_chl, low_pot_rev_fn);
                     ret.comparisons += SORT_COST[num_chl];
                     for (unsigned c = 0; c < num_chl; ++c) {
-                        unsigned chl = pot_idx[num_chl - 1 - c];
+                        unsigned chl = pot_idx[c];
                         ++ret.comparisons;
                         if (!(pot_roots[und_idx].second << pot_roots[chl].second)) break;
                         pot_roots[und_idx].first |= pot_roots[chl].first;
@@ -658,10 +670,10 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
 
                 unsigned num_leafs = 0;
                 for (unsigned leaf : leafs) pot_idx[num_leafs++] = leaf;
-                std::sort(pot_idx.begin(), pot_idx.begin() + num_leafs, high_pot_fn);
+                std::sort(pot_idx.begin(), pot_idx.begin() + num_leafs, high_pot_rev_fn);
                 ret.comparisons += SORT_COST[num_leafs];
                 for (unsigned l = 0; l < num_leafs; ++l) {
-                    unsigned leaf = pot_idx[num_leafs - 1 - l];
+                    unsigned leaf = pot_idx[l];
                     ++ret.comparisons;
                     if (!(pot_roots[leaf].second << best_feefrac)) break;
                     for (unsigned idx : pot_roots[leaf].first) epot_desc |= desc[idx];
