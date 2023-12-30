@@ -628,36 +628,28 @@ FUZZ_TARGET(clustermempool_efficient_limits)
     FuzzBitSet done;
     while (done != all) {
         CandidateSetAnalysis<FuzzBitSet> ret;
-        auto single_viable = SingleViableTransaction(sorted.cluster, done);
-        if (single_viable) {
-            ret.best_candidate_set.Set(*single_viable);
-        } else {
 #if 1
-            ret = FindBestCandidateSetFancy(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
+        ret = FindBestCandidateSetFancy(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
 #else
-            ret = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
+        ret = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
 #endif
-            // Sanity checks
-            // - connectedness of candidate
-            assert(IsConnectedSubset(sorted.cluster, ret.best_candidate_set));
-            // - claimed FeeFrac matches
-            auto feefrac = ComputeSetFeeFrac(sorted.cluster, ret.best_candidate_set);
-            assert(feefrac == ret.best_candidate_feefrac);
-            // - topologically consistent
-            FuzzBitSet merged_ancestors = done;
-            for (unsigned val : ret.best_candidate_set) {
-                merged_ancestors |= anc[val];
-            }
-            assert((done | ret.best_candidate_set) == merged_ancestors);
+        // Sanity checks
+        // - connectedness of candidate
+        assert(IsConnectedSubset(sorted.cluster, ret.best_candidate_set));
+        // - claimed FeeFrac matches
+        auto feefrac = ComputeSetFeeFrac(sorted.cluster, ret.best_candidate_set);
+        assert(feefrac == ret.best_candidate_feefrac);
+        // - topologically consistent
+        FuzzBitSet merged_ancestors = done;
+        for (unsigned val : ret.best_candidate_set) {
+            merged_ancestors |= anc[val];
         }
+        assert((done | ret.best_candidate_set) == merged_ancestors);
         unsigned left = (all / done).Count();
         // - if small enough, matches exhaustive search FeeFrac
 #if 1
-        if (left <= 12 && !single_viable) {
+        if (left <= 12) {
             auto ret_exhaustive = FindBestCandidateSetExhaustive(sorted.cluster, anc, done, {});
-            if (ret_exhaustive.best_candidate_feefrac >> ret.best_candidate_feefrac) {
-                std::cerr << "CLUSTER " << sorted.cluster << " DONE=" << done << std::endl;
-            }
             assert(!(ret_exhaustive.best_candidate_feefrac << ret.best_candidate_feefrac) && !(ret_exhaustive.best_candidate_feefrac >> ret.best_candidate_feefrac));
         }
 #endif

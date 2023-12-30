@@ -857,23 +857,6 @@ struct LinearizationResult
     size_t comparisons{0};
 };
 
-template<typename S>
-std::optional<unsigned> SingleViableTransaction(const Cluster<S>& cluster, const S& done)
-{
-    unsigned num_viable = 0;
-    unsigned first_viable = 0;
-    for (unsigned i : S::Fill(cluster.size()) / done) {
-        if (done >> cluster[i].second) {
-            if (++num_viable == 2) return {};
-            first_viable = i;
-        }
-    }
-#if DEBUG_LINEARIZE
-    assert(num_viable == 1);
-#endif
-    return {first_viable};
-}
-
 [[maybe_unused]] std::ostream& operator<<(std::ostream& o, const FeeFrac& data)
 {
     o << "(" << data.fee << "/" << data.size << "=" << ((double)data.fee / data.size) << ")";
