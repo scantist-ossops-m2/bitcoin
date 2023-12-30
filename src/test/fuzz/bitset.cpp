@@ -35,6 +35,7 @@ void TestType(Span<const uint8_t> buffer)
         /* iterators and operator[] */
         auto it = real[idx].begin();
         unsigned first = S::Size();
+        unsigned last = S::Size();
         for (unsigned i = 0; i < S::Size(); ++i) {
             bool match = (it != real[idx].end()) && *it == i;
             assert(sim[idx][i] == real[idx][i]);
@@ -43,6 +44,7 @@ void TestType(Span<const uint8_t> buffer)
             if (match) {
                 ++it;
                 if (first == S::Size()) first = i;
+                last = i;
             }
         }
         assert(it == real[idx].end());
@@ -53,6 +55,7 @@ void TestType(Span<const uint8_t> buffer)
         /* First */
         if (sim[idx].any()) {
             assert(first == real[idx].First());
+            assert(last == real[idx].Last());
         }
         /* Count */
         assert(sim[idx].count() == real[idx].Count());
