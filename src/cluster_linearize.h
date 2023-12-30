@@ -649,12 +649,16 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                     pot_roots[und_idx].second = cluster[und_idx].first;
                     unsigned num_chl = 0;
                     for (unsigned chl : children) pot_idx[num_chl++] = chl;
+                    ret.comparisons += num_chl;
+                    num_chl = std::partition(pot_idx.begin(), pot_idx.begin() + num_chl, [&](unsigned chl) { return pot_roots[und_idx].second << pot_roots[chl].second; }) - pot_idx.begin();
                     std::sort(pot_idx.begin(), pot_idx.begin() + num_chl, low_pot_rev_fn);
                     ret.comparisons += SORT_COST[num_chl];
                     for (unsigned c = 0; c < num_chl; ++c) {
                         unsigned chl = pot_idx[c];
-                        ++ret.comparisons;
-                        if (!(pot_roots[und_idx].second << pot_roots[chl].second)) break;
+                        if (c) {
+                            ++ret.comparisons;
+                            if (!(pot_roots[und_idx].second << pot_roots[chl].second)) break;
+                        }
                         pot_roots[und_idx].first |= pot_roots[chl].first;
                         pot_roots[und_idx].second += pot_roots[chl].second;
                         leafs.Reset(chl);
@@ -670,12 +674,12 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
 
                 unsigned num_leafs = 0;
                 for (unsigned leaf : leafs) pot_idx[num_leafs++] = leaf;
+                ret.comparisons += num_leafs;
+                num_leafs = std::partition(pot_idx.begin(), pot_idx.begin() + num_leafs, [&](unsigned leaf) { return pot_roots[leaf].second << best_feefrac; }) - pot_idx.begin();
                 std::sort(pot_idx.begin(), pot_idx.begin() + num_leafs, high_pot_rev_fn);
                 ret.comparisons += SORT_COST[num_leafs];
                 for (unsigned l = 0; l < num_leafs; ++l) {
                     unsigned leaf = pot_idx[l];
-                    ++ret.comparisons;
-                    if (!(pot_roots[leaf].second << best_feefrac)) break;
                     for (unsigned idx : pot_roots[leaf].first) epot_desc |= desc[idx];
                     epot |= pot_roots[leaf].first;
                     if (epot_desc == epot) {
@@ -698,12 +702,16 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                 pot_roots[und_idx].second = cluster[und_idx].first;
                 unsigned num_par = 0;
                 for (unsigned par : parents) pot_idx[num_par++] = par;
+                ret.comparisons += num_par;
+                num_par = std::partition(pot_idx.begin(), pot_idx.begin() + num_par, [&](unsigned par) { return pot_roots[und_idx].second >> pot_roots[par].second; }) - pot_idx.begin();
                 std::sort(pot_idx.begin(), pot_idx.begin() + num_par, low_pot_fn);
                 ret.comparisons += SORT_COST[num_par];
                 for (unsigned p = 0; p < num_par; ++p) {
                     unsigned par = pot_idx[p];
-                    ++ret.comparisons;
-                    if (!(pot_roots[und_idx].second >> pot_roots[par].second)) break;
+                    if (p) {
+                        ++ret.comparisons;
+                        if (!(pot_roots[und_idx].second >> pot_roots[par].second)) break;
+                    }
                     pot_roots[und_idx].first |= pot_roots[par].first;
                     pot_roots[und_idx].second += pot_roots[par].second;
                     roots.Reset(par);
@@ -712,11 +720,15 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
             unsigned num_roots = 0;
             pivot = std::nullopt;
             for (unsigned root : roots) pot_idx[num_roots++] = root;
+            if (!pot_feefrac.IsEmpty()) {
+                ret.comparisons += num_roots;
+                num_roots = std::partition(pot_idx.begin(), pot_idx.begin() + num_roots, [&](unsigned root) { return pot_roots[root].second >> pot_feefrac; }) - pot_idx.begin();
+            }
             std::sort(pot_idx.begin(), pot_idx.begin() + num_roots, high_pot_fn);
             ret.comparisons += SORT_COST[num_roots];
             for (unsigned r = 0; r < num_roots; ++r) {
                 unsigned root = pot_idx[r];
-                if (!pot_feefrac.IsEmpty()) {
+                if (r) {
                     ++ret.comparisons;
                     if (!(pot_roots[root].second >> pot_feefrac)) break;
                 }
