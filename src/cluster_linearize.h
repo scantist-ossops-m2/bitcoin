@@ -645,6 +645,13 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                         pot_roots[und_idx].second += pot_roots[chl].second;
                         leafs.Reset(chl);
                     }
+                    if ((pot_roots[und_idx].first | exc) >> desc[und_idx]) {
+                        ++ret.comparisons;
+                        if (pot_roots[und_idx].second << best_feefrac) {
+                            exc |= pot_roots[und_idx].first;
+                            leafs.Reset(und_idx);
+                        }
+                    }
                 }
 
                 unsigned num_leafs = 0;
@@ -661,6 +668,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                         exc = epot;
                     }
                 }
+
                 undecided /= exc;
             }
 
@@ -705,6 +713,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                     inc = pot;
                     inc_feefrac = pot_feefrac;
                     pivot = std::nullopt;
+                } else if ((pot_roots[root].first | inc) >> anc[root]) {
+                    inc_feefrac += ComputeSetFeeFrac(cluster, pot_roots[root].first);
+                    inc |= pot_roots[root].first;
                 } else if (!pivot.has_value()) {
                     pivot = root;
                 }

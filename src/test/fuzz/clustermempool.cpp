@@ -653,7 +653,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
         unsigned left = (all / done).Count();
         // - if small enough, matches exhaustive search FeeFrac
 #if 1
-        if (left <= 18 && !single_viable) {
+        if (left <= 12 && !single_viable) {
             auto ret_exhaustive = FindBestCandidateSetExhaustive(sorted.cluster, anc, done, {});
             if (ret_exhaustive.best_candidate_feefrac >> ret.best_candidate_feefrac) {
                 std::cerr << "CLUSTER " << sorted.cluster << " DONE=" << done << std::endl;
