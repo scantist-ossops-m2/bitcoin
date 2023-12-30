@@ -567,8 +567,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
      * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
      * - pot_feefrac: upper bound on how good this element can get.
      * - pivot: transactions whose ancestors and descendants will be considered for next split
+     * - pot: potential set
      */
-    using QueueElem = std::tuple<S, S, FeeFrac, FeeFrac, unsigned>;
+    using QueueElem = std::tuple<S, S, FeeFrac, FeeFrac, unsigned, S>;
     /** Queues with work items. */
     static constexpr unsigned NUM_QUEUES = 1;
     std::deque<QueueElem> queue[NUM_QUEUES];
@@ -614,6 +615,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
         S undecided = todo / (inc | exc);
         FeeFrac pot_feefrac;
         std::optional<unsigned> pivot;
+        S pot;
 
         {
             if (!best_feefrac.IsEmpty()) {
@@ -672,7 +674,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
                 undecided /= exc;
             }
 
-            S pot = inc;
+            pot = inc;
             S pot_anc = inc;
             pot_feefrac = inc_feefrac;
             S roots;
@@ -746,7 +748,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
 
         // Construct a new work item in one of the queues, in a round-robin fashion, and update
         // statistics.
-        queue[insert_count % NUM_QUEUES].emplace_back(std::move(inc), std::move(exc), std::move(inc_feefrac), std::move(pot_feefrac), *pivot);
+        queue[insert_count % NUM_QUEUES].emplace_back(std::move(inc), std::move(exc), std::move(inc_feefrac), std::move(pot_feefrac), *pivot, std::move(pot));
         ++insert_count;
         ++queue_tot;
         ret.max_queue_size = std::max<size_t>(ret.max_queue_size, queue_tot);
@@ -791,24 +793,16 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
             queue_idx = rng() % NUM_QUEUES;
         } while (queue[queue_idx].empty());
 
-        // If this item's potential feefrac is not better than the best seen so far, drop it.
-        const auto& pot_feefrac_ref = std::get<3>(queue[queue_idx].front());
-#if DEBUG_LINEARIZE
-        assert(pot_feefrac_ref.size > 0);
-#endif
-        if (!best_feefrac.IsEmpty()) {
-            ++ret.comparisons;
-            if (pot_feefrac_ref <= best_feefrac) {
-                queue[queue_idx].pop_front();
-                --queue_tot;
-                continue;
-            }
-        }
-
         // Move the work item from the queue to local variables, popping it.
-        auto [inc, exc, inc_feefrac, pot_feefrac, pivot] = std::move(queue[queue_idx].front());
+        auto [inc, exc, inc_feefrac, pot_feefrac, pivot, pot] = std::move(queue[queue_idx].front());
         queue[queue_idx].pop_front();
         --queue_tot;
+
+        // If this item's potential feefrac is not better than the best seen so far, drop it.
+        if (!best_feefrac.IsEmpty()) {
+            ++ret.comparisons;
+            if (pot_feefrac <= best_feefrac) continue;
+        }
 
         // Decide which transaction to split on (create new work items; one with it included, one
         // with it excluded).
