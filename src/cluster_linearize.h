@@ -874,364 +874,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetFancy(const Cluster<S>& cluster, con
     return ret;
 }
 
-struct LinearizationResult
-{
-    std::vector<unsigned> linearization;
-    size_t iterations{0};
-    size_t comparisons{0};
-};
-
-[[maybe_unused]] std::ostream& operator<<(std::ostream& o, const FeeFrac& data)
-{
-    o << "(" << data.fee << "/" << data.size << "=" << ((double)data.fee / data.size) << ")";
-    return o;
-}
-
-[[maybe_unused]] std::ostream& operator<<(std::ostream& o, Span<const unsigned> data)
-{
-    o << '{';
-    bool first = true;
-    for (unsigned i : data) {
-        if (first) {
-            first = false;
-        } else {
-            o << ',';
-        }
-        o << i;
-    }
-    o << '}';
-    return o;
-}
-
-template<typename I>
-std::ostream& operator<<(std::ostream& s, const bitset_detail::IntBitSet<I>& bs)
-{
-    s << "[";
-    size_t cnt = 0;
-    for (size_t i = 0; i < bs.Size(); ++i) {
-        if (bs[i]) {
-            if (cnt) s << ",";
-            ++cnt;
-            s << i;
-        }
-    }
-    s << "]";
-    return s;
-}
-
-template<typename I, unsigned N>
-std::ostream& operator<<(std::ostream& s, const bitset_detail::MultiIntBitSet<I, N>& bs)
-{
-    s << "[";
-    size_t cnt = 0;
-    for (size_t i = 0; i < bs.Size(); ++i) {
-        if (bs[i]) {
-            if (cnt) s << ",";
-            ++cnt;
-            s << i;
-        }
-    }
-    s << "]";
-    return s;
-}
-
-/** String serialization for debug output of Cluster. */
-template<typename S>
-std::ostream& operator<<(std::ostream& o, const Cluster<S>& cluster)
-{
-    o << "Cluster{";
-    for (size_t i = 0; i < cluster.size(); ++i) {
-        if (i) o << ",";
-        o << i << ":" << cluster[i].first << cluster[i].second;
-    }
-    o << "}";
-    return o;
-}
-
-/** Compute a full linearization of a cluster (vector of cluster indices). */
-template<typename S>
-LinearizationResult LinearizeCluster(const Cluster<S>& cluster, unsigned optimal_limit, uint64_t seed)
-{
-    LinearizationResult ret;
-    ret.linearization.reserve(cluster.size());
-    auto all = S::Fill(cluster.size());
-
-    /** Very fast local random number generator. */
-    XoRoShiRo128PlusPlus rng(seed);
-
-    std::vector<std::tuple<S, S, bool, std::optional<unsigned>>> queue;
-    queue.reserve(cluster.size() * 2);
-    queue.emplace_back(S{}, S{}, true, std::nullopt);
-    std::vector<unsigned> bottleneck_list;
-    bottleneck_list.reserve(cluster.size());
-
-    // Precompute stuff.
-    SortedCluster<S> sorted(cluster);
-    AncestorSets<S> anc(sorted.cluster);
-    DescendantSets<S> desc(anc);
-    // Precompute ancestor set sizes, to help with topological sort.
-    std::vector<unsigned> anccount(cluster.size(), 0);
-    for (unsigned i = 0; i < cluster.size(); ++i) {
-        anccount[i] = anc[i].Count();
-    }
-    AncestorSetFeeFracs anc_feefracs(sorted.cluster, anc, {});
-
-    while (!queue.empty()) {
-        auto [done, after, maybe_bottlenecks, single] = queue.back();
-        queue.pop_back();
-
-        if (single) {
-            ret.linearization.push_back(*single);
-            anc_feefracs.Done(sorted.cluster, desc, *single);
-            continue;
-        }
-
-        auto todo = all / (done | after);
-        if (todo.None()) continue;
-        unsigned left = todo.Count();
-
-        if (left == 1) {
-            unsigned idx = todo.First();
-            ret.linearization.push_back(idx);
-            anc_feefracs.Done(sorted.cluster, desc, idx);
-            continue;
-        }
-
-        if (maybe_bottlenecks) {
-            // Find bottlenecks in the current graph.
-            auto bottlenecks = todo;
-            for (unsigned i : todo) {
-                ++ret.iterations;
-                bottlenecks &= (anc[i] | desc[i]);
-                if (bottlenecks.None()) break;
-            }
-
-            if (bottlenecks.Any()) {
-                bottleneck_list.clear();
-                for (unsigned i : bottlenecks) bottleneck_list.push_back(i);
-                std::sort(bottleneck_list.begin(), bottleneck_list.end(), [&](unsigned a, unsigned b) { return anccount[a] > anccount[b]; });
-                for (unsigned i : bottleneck_list) {
-                    queue.emplace_back(done | anc[i], after, false, std::nullopt);
-                    queue.emplace_back(S{}, S{}, false, i);
-                    after |= desc[i];
-                }
-                queue.emplace_back(done, after, false, std::nullopt);
-                continue;
-            }
-        }
-
-        CandidateSetAnalysis<S> analysis;
-        if (left > optimal_limit) {
-            analysis = FindBestAncestorSet(sorted.cluster, anc, anc_feefracs, done, after);
-        } else {
-            analysis = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, after, rng() ^ ret.iterations);
-        }
-
-        // Sanity checks.
-#if DEBUG_LINEARIZE
-        assert(analysis.best_candidate_set.Any()); // Must be at least one transaction
-        assert(!(analysis.best_candidate_set && (done | after))); // Cannot overlap with processed ones.
-#endif
-
-        // Update statistics.
-        ret.iterations += analysis.iterations;
-        ret.comparisons += analysis.comparisons;
-
-        // Append candidate's transactions to linearization, and topologically sort them.
-        size_t old_size = ret.linearization.size();
-        for (unsigned selected : analysis.best_candidate_set) {
-            ret.linearization.emplace_back(selected);
-        }
-        std::sort(ret.linearization.begin() + old_size, ret.linearization.end(), [&](unsigned a, unsigned b) {
-            if (anccount[a] == anccount[b]) return a < b;
-            return anccount[a] < anccount[b];
-        });
-
-        // Update bookkeeping
-        done |= analysis.best_candidate_set;
-        anc_feefracs.Done(sorted.cluster, desc, analysis.best_candidate_set);
-        queue.emplace_back(done, after, true, std::nullopt);
-    }
-
-    // Map linearization back from sorted cluster indices to original indices.
-    for (unsigned i = 0; i < cluster.size(); ++i) {
-        ret.linearization[i] = sorted.sorted_to_original[ret.linearization[i]];
-    }
-
-    return ret;
-}
-
-uint8_t ReadSpanByte(Span<const unsigned char>& data)
-{
-    if (data.empty()) return 0;
-    uint8_t val = data[0];
-    data = data.subspan(1);
-    return val;
-}
-
-/** Deserialize a number, in little-endian 7 bit format, top bit set = more size. */
-uint64_t DeserializeNumberBase128(Span<const unsigned char>& data)
-{
-    uint64_t ret{0};
-    for (int i = 0; i < 10; ++i) {
-        uint8_t b = ReadSpanByte(data);
-        ret |= ((uint64_t)(b & uint8_t{0x7F})) << (7 * i);
-        if ((b & 0x80) == 0) break;
-    }
-    return ret;
-}
-
-/** Serialize a number, in little-endian 7 bit format, top bit set = more size. */
-void SerializeNumberBase128(uint64_t val, std::vector<unsigned char>& data)
-{
-    for (int i = 0; i < 10; ++i) {
-        uint8_t b = (val >> (7 * i)) & 0x7F;
-        val &= ~(uint64_t{0x7F} << (7 * i));
-        if (val) {
-            data.push_back(b | 0x80);
-        } else {
-            data.push_back(b);
-            break;
-        }
-    }
-}
-
-/** Serialize a cluster in the following format:
- *
- * - For every transaction:
- *   - Base128 encoding of its byte size (at least 1, max 2^22-1).
- *   - Base128 encoding of its fee in fee (max 2^51-1).
- *   - For each of its direct parents:
- *     - If parent_idx < child_idx:
- *       - Base128 encoding of (child_idx - parent_idx)
- *     - If parent_idx > child_idx:
- *       - Base128 encoding of (parent_idx)
- *   - A zero byte
- * - A zero byte
- */
-template<typename S>
-void SerializeCluster(const Cluster<S>& cluster, std::vector<unsigned char>& data)
-{
-    for (unsigned i = 0; i < cluster.size(); ++i) {
-        SerializeNumberBase128(cluster[i].first.size, data);
-        SerializeNumberBase128(cluster[i].first.fee, data);
-        for (unsigned j = 1; j <= i; ++j) {
-            if (cluster[i].second[i - j]) SerializeNumberBase128(j, data);
-        }
-        for (unsigned j = i + 1; j < cluster.size(); ++j) {
-            if (cluster[i].second[j]) SerializeNumberBase128(j, data);
-        }
-        data.push_back(0);
-    }
-    data.push_back(0);
-}
-
-/** Deserialize a cluster in the same format as SerializeCluster (overflows wrap). */
-template<typename S>
-Cluster<S> DeserializeCluster(Span<const unsigned char>& data)
-{
-    Cluster<S> ret;
-    while (true) {
-        uint32_t size = DeserializeNumberBase128(data) & 0x3fffff;
-        if (size == 0) break;
-        uint64_t fee = DeserializeNumberBase128(data) & 0x7ffffffffffff;
-        S parents;
-        while (true) {
-            unsigned read = DeserializeNumberBase128(data);
-            if (read == 0) break;
-            if (read <= ret.size() && ret.size() < S::Size() + read) {
-                parents.Set(ret.size() - read);
-            } else {
-                if (read < S::Size()) {
-                    parents.Set(read);
-                }
-            }
-        }
-        ret.emplace_back(FeeFrac{fee, size}, std::move(parents));
-    }
-    S all = S::Fill(std::min<unsigned>(ret.size(), S::Size()));
-    for (unsigned i = 0; i < ret.size(); ++i) {
-        ret[i].second &= all;
-    }
-    return ret;
-}
-
-/** Minimize the set of parents of every cluster transaction, without changing ancestry. */
-template<typename S>
-void WeedCluster(Cluster<S>& cluster, const AncestorSets<S>& ancs)
-{
-    std::vector<std::pair<unsigned, unsigned>> mapping(cluster.size());
-    for (unsigned i = 0; i < cluster.size(); ++i) {
-        mapping[i] = {ancs[i].Count(), i};
-    }
-    std::sort(mapping.begin(), mapping.end());
-    for (unsigned i = 0; i < cluster.size(); ++i) {
-        const auto& [_anc_count, idx] = mapping[i];
-        S parents;
-        S cover;
-        cover.Set(idx);
-        for (unsigned j = 0; j < i; ++j) {
-            const auto& [_anc_count_j, idx_j] = mapping[i - 1 - j];
-            if (ancs[idx][idx_j] && !cover[idx_j]) {
-                parents.Set(idx_j);
-                cover |= ancs[idx_j];
-            }
-        }
-#if DEBUG_LINEARIZE
-        assert(cover == ancs[idx]);
-#endif
-        cluster[idx].second = std::move(parents);
-    }
-}
-
-/** Construct a new cluster with done removed (leaving the rest in order). */
-template<typename S>
-Cluster<S> TrimCluster(const Cluster<S>& cluster, const S& done)
-{
-    Cluster<S> ret;
-    std::vector<unsigned> mapping;
-    mapping.resize(cluster.size());
-    ret.reserve(cluster.size() - done.Count());
-    for (unsigned idx : S::Fill(cluster.size()) / done) {
-        mapping[idx] = ret.size();
-        ret.push_back(cluster[idx]);
-    }
-    for (unsigned i = 0; i < ret.size(); ++i) {
-        S parents;
-        for (unsigned idx : ret[i].second / done) {
-            parents.Set(mapping[idx]);
-        }
-        ret[i].second = std::move(parents);
-    }
-    return ret;
-}
-
-/** Minimize a cluster, and serialize to byte vector. */
-template<typename S>
-std::vector<unsigned char> DumpCluster(Cluster<S> cluster)
-{
-    AncestorSets<S> anc(cluster);
-    WeedCluster(cluster, anc);
-    std::vector<unsigned char> data;
-    SerializeCluster(cluster, data);
-    data.pop_back();
-    return data;
-}
-
-/** Test whether an ancestor set was computed from an acyclic cluster. */
-template<typename S>
-bool IsAcyclic(const AncestorSets<S>& anc)
-{
-    for (unsigned i = 0; i < anc.Size(); ++i) {
-        // Determine if there is a j<i which i has as ancestor, and which has i as ancestor.
-        for (unsigned j : anc[i]) {
-            if (j >= i) break;
-            if (anc[j][i]) return false;
-        }
-    }
-    return true;
-}
-
 template<typename S>
 std::vector<std::pair<FeeFrac, S>> ChunkLinearization(const Cluster<S>& cluster, Span<const unsigned> linearization)
 {
@@ -1475,6 +1117,420 @@ std::vector<unsigned> MergeLinearizations(const Cluster<S>& cluster, Span<const 
 
     return ret;
 }
+
+struct LinearizationResult
+{
+    std::vector<unsigned> linearization;
+    size_t iterations{0};
+    size_t comparisons{0};
+};
+
+[[maybe_unused]] std::ostream& operator<<(std::ostream& o, const FeeFrac& data)
+{
+    o << "(" << data.fee << "/" << data.size << "=" << ((double)data.fee / data.size) << ")";
+    return o;
+}
+
+[[maybe_unused]] std::ostream& operator<<(std::ostream& o, Span<const unsigned> data)
+{
+    o << '{';
+    bool first = true;
+    for (unsigned i : data) {
+        if (first) {
+            first = false;
+        } else {
+            o << ',';
+        }
+        o << i;
+    }
+    o << '}';
+    return o;
+}
+
+template<typename I>
+std::ostream& operator<<(std::ostream& s, const bitset_detail::IntBitSet<I>& bs)
+{
+    s << "[";
+    size_t cnt = 0;
+    for (size_t i = 0; i < bs.Size(); ++i) {
+        if (bs[i]) {
+            if (cnt) s << ",";
+            ++cnt;
+            s << i;
+        }
+    }
+    s << "]";
+    return s;
+}
+
+template<typename I, unsigned N>
+std::ostream& operator<<(std::ostream& s, const bitset_detail::MultiIntBitSet<I, N>& bs)
+{
+    s << "[";
+    size_t cnt = 0;
+    for (size_t i = 0; i < bs.Size(); ++i) {
+        if (bs[i]) {
+            if (cnt) s << ",";
+            ++cnt;
+            s << i;
+        }
+    }
+    s << "]";
+    return s;
+}
+
+/** String serialization for debug output of Cluster. */
+template<typename S>
+std::ostream& operator<<(std::ostream& o, const Cluster<S>& cluster)
+{
+    o << "Cluster{";
+    for (size_t i = 0; i < cluster.size(); ++i) {
+        if (i) o << ",";
+        o << i << ":" << cluster[i].first << cluster[i].second;
+    }
+    o << "}";
+    return o;
+}
+
+/** Compute a full linearization of a cluster using ancestor-based sort. */
+template<typename S>
+LinearizationResult LinearizeClusterAnc(const Cluster<S>& cluster)
+{
+    LinearizationResult ret;
+    ret.linearization.reserve(cluster.size());
+    AncestorSets<S> anc(cluster);
+    DescendantSets<S> desc(anc);
+    std::vector<unsigned> anccount(cluster.size(), 0);
+    for (unsigned i = 0; i < cluster.size(); ++i) {
+        anccount[i] = anc[i].Count();
+    }
+    AncestorSetFeeFracs anc_feefracs(cluster, anc, {});
+    auto all = S::Fill(cluster.size());
+    S done;
+
+    while (done != all) {
+        auto analysis = FindBestAncestorSet(cluster, anc, anc_feefracs, done, {});
+        ret.iterations += analysis.iterations;
+        ret.comparisons += analysis.comparisons;
+
+        size_t old_size = ret.linearization.size();
+        for (unsigned selected : analysis.best_candidate_set) {
+            ret.linearization.emplace_back(selected);
+        }
+        std::sort(ret.linearization.begin() + old_size, ret.linearization.end(), [&](unsigned a, unsigned b) {
+            if (anccount[a] == anccount[b]) return a < b;
+            return anccount[a] < anccount[b];
+        });
+
+        // Update bookkeeping
+        done |= analysis.best_candidate_set;
+        anc_feefracs.Done(cluster, desc, analysis.best_candidate_set);
+    }
+
+    return ret;
+}
+
+/** Compute a full linearization of a cluster (vector of cluster indices). */
+template<typename S>
+LinearizationResult LinearizeCluster(const Cluster<S>& cluster, unsigned optimal_limit, uint64_t seed)
+{
+    LinearizationResult ret;
+    ret.linearization.reserve(cluster.size());
+    auto all = S::Fill(cluster.size());
+
+    /** Very fast local random number generator. */
+    XoRoShiRo128PlusPlus rng(seed);
+
+    std::vector<std::tuple<S, S, bool, std::optional<unsigned>>> queue;
+    queue.reserve(cluster.size() * 2);
+    queue.emplace_back(S{}, S{}, true, std::nullopt);
+    std::vector<unsigned> bottleneck_list;
+    bottleneck_list.reserve(cluster.size());
+
+    // Precompute stuff.
+#if 0
+    auto prelin = LinearizeClusterAnc(cluster).linearization;
+    AncestorSets<S> preanc(cluster);
+    PostLinearization(cluster, prelin);
+    S foundanc;
+    for (unsigned i : prelin) {
+        foundanc.Set(i);
+        assert(preanc[i] << foundanc);
+    }
+    ReorderedCluster<S> sorted(cluster, prelin);
+#else
+    SortedCluster<S> sorted(cluster);
+#endif
+
+    AncestorSets<S> anc(sorted.cluster);
+    DescendantSets<S> desc(anc);
+    // Precompute ancestor set sizes, to help with topological sort.
+    std::vector<unsigned> anccount(cluster.size(), 0);
+    for (unsigned i = 0; i < cluster.size(); ++i) {
+        anccount[i] = anc[i].Count();
+    }
+    AncestorSetFeeFracs anc_feefracs(sorted.cluster, anc, {});
+
+    while (!queue.empty()) {
+        auto [done, after, maybe_bottlenecks, single] = queue.back();
+        queue.pop_back();
+
+        if (single) {
+            ret.linearization.push_back(*single);
+            anc_feefracs.Done(sorted.cluster, desc, *single);
+            continue;
+        }
+
+        auto todo = all / (done | after);
+        if (todo.None()) continue;
+        unsigned left = todo.Count();
+
+        if (left == 1) {
+            unsigned idx = todo.First();
+            ret.linearization.push_back(idx);
+            anc_feefracs.Done(sorted.cluster, desc, idx);
+            continue;
+        }
+
+        if (maybe_bottlenecks) {
+            // Find bottlenecks in the current graph.
+            auto bottlenecks = todo;
+            for (unsigned i : todo) {
+                ++ret.iterations;
+                bottlenecks &= (anc[i] | desc[i]);
+                if (bottlenecks.None()) break;
+            }
+
+            if (bottlenecks.Any()) {
+                bottleneck_list.clear();
+                for (unsigned i : bottlenecks) bottleneck_list.push_back(i);
+                std::sort(bottleneck_list.begin(), bottleneck_list.end(), [&](unsigned a, unsigned b) { return anccount[a] > anccount[b]; });
+                for (unsigned i : bottleneck_list) {
+                    queue.emplace_back(done | anc[i], after, false, std::nullopt);
+                    queue.emplace_back(S{}, S{}, false, i);
+                    after |= desc[i];
+                }
+                queue.emplace_back(done, after, false, std::nullopt);
+                continue;
+            }
+        }
+
+        CandidateSetAnalysis<S> analysis;
+        if (left > optimal_limit) {
+            analysis = FindBestAncestorSet(sorted.cluster, anc, anc_feefracs, done, after);
+        } else {
+#if 0
+            analysis = FindBestCandidateSetFancy(sorted.cluster, anc, desc, anc_feefracs, done, after, rng() ^ ret.iterations);
+#else
+            analysis = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, after, rng() ^ ret.iterations);
+#endif
+        }
+
+        // Sanity checks.
+#if DEBUG_LINEARIZE
+        assert(analysis.best_candidate_set.Any()); // Must be at least one transaction
+        assert(!(analysis.best_candidate_set && (done | after))); // Cannot overlap with processed ones.
+#endif
+
+        // Update statistics.
+        ret.iterations += analysis.iterations;
+        ret.comparisons += analysis.comparisons;
+
+        // Append candidate's transactions to linearization, and topologically sort them.
+        size_t old_size = ret.linearization.size();
+        for (unsigned selected : analysis.best_candidate_set) {
+            ret.linearization.emplace_back(selected);
+        }
+        std::sort(ret.linearization.begin() + old_size, ret.linearization.end(), [&](unsigned a, unsigned b) {
+            if (anccount[a] == anccount[b]) return a < b;
+            return anccount[a] < anccount[b];
+        });
+
+        // Update bookkeeping
+        done |= analysis.best_candidate_set;
+        anc_feefracs.Done(sorted.cluster, desc, analysis.best_candidate_set);
+        queue.emplace_back(done, after, true, std::nullopt);
+    }
+
+    // Map linearization back from sorted cluster indices to original indices.
+    for (unsigned i = 0; i < cluster.size(); ++i) {
+        ret.linearization[i] = sorted.sorted_to_original[ret.linearization[i]];
+    }
+
+    return ret;
+}
+
+uint8_t ReadSpanByte(Span<const unsigned char>& data)
+{
+    if (data.empty()) return 0;
+    uint8_t val = data[0];
+    data = data.subspan(1);
+    return val;
+}
+
+/** Deserialize a number, in little-endian 7 bit format, top bit set = more size. */
+uint64_t DeserializeNumberBase128(Span<const unsigned char>& data)
+{
+    uint64_t ret{0};
+    for (int i = 0; i < 10; ++i) {
+        uint8_t b = ReadSpanByte(data);
+        ret |= ((uint64_t)(b & uint8_t{0x7F})) << (7 * i);
+        if ((b & 0x80) == 0) break;
+    }
+    return ret;
+}
+
+/** Serialize a number, in little-endian 7 bit format, top bit set = more size. */
+void SerializeNumberBase128(uint64_t val, std::vector<unsigned char>& data)
+{
+    for (int i = 0; i < 10; ++i) {
+        uint8_t b = (val >> (7 * i)) & 0x7F;
+        val &= ~(uint64_t{0x7F} << (7 * i));
+        if (val) {
+            data.push_back(b | 0x80);
+        } else {
+            data.push_back(b);
+            break;
+        }
+    }
+}
+
+/** Serialize a cluster in the following format:
+ *
+ * - For every transaction:
+ *   - Base128 encoding of its byte size (at least 1, max 2^22-1).
+ *   - Base128 encoding of its fee in fee (max 2^51-1).
+ *   - For each of its direct parents:
+ *     - If parent_idx < child_idx:
+ *       - Base128 encoding of (child_idx - parent_idx)
+ *     - If parent_idx > child_idx:
+ *       - Base128 encoding of (parent_idx)
+ *   - A zero byte
+ * - A zero byte
+ */
+template<typename S>
+void SerializeCluster(const Cluster<S>& cluster, std::vector<unsigned char>& data)
+{
+    for (unsigned i = 0; i < cluster.size(); ++i) {
+        SerializeNumberBase128(cluster[i].first.size, data);
+        SerializeNumberBase128(cluster[i].first.fee, data);
+        for (unsigned j = 1; j <= i; ++j) {
+            if (cluster[i].second[i - j]) SerializeNumberBase128(j, data);
+        }
+        for (unsigned j = i + 1; j < cluster.size(); ++j) {
+            if (cluster[i].second[j]) SerializeNumberBase128(j, data);
+        }
+        data.push_back(0);
+    }
+    data.push_back(0);
+}
+
+/** Deserialize a cluster in the same format as SerializeCluster (overflows wrap). */
+template<typename S>
+Cluster<S> DeserializeCluster(Span<const unsigned char>& data)
+{
+    Cluster<S> ret;
+    while (true) {
+        uint32_t size = DeserializeNumberBase128(data) & 0x3fffff;
+        if (size == 0) break;
+        uint64_t fee = DeserializeNumberBase128(data) & 0x7ffffffffffff;
+        S parents;
+        while (true) {
+            unsigned read = DeserializeNumberBase128(data);
+            if (read == 0) break;
+            if (read <= ret.size() && ret.size() < S::Size() + read) {
+                parents.Set(ret.size() - read);
+            } else {
+                if (read < S::Size()) {
+                    parents.Set(read);
+                }
+            }
+        }
+        ret.emplace_back(FeeFrac{fee, size}, std::move(parents));
+    }
+    S all = S::Fill(std::min<unsigned>(ret.size(), S::Size()));
+    for (unsigned i = 0; i < ret.size(); ++i) {
+        ret[i].second &= all;
+    }
+    return ret;
+}
+
+/** Minimize the set of parents of every cluster transaction, without changing ancestry. */
+template<typename S>
+void WeedCluster(Cluster<S>& cluster, const AncestorSets<S>& ancs)
+{
+    std::vector<std::pair<unsigned, unsigned>> mapping(cluster.size());
+    for (unsigned i = 0; i < cluster.size(); ++i) {
+        mapping[i] = {ancs[i].Count(), i};
+    }
+    std::sort(mapping.begin(), mapping.end());
+    for (unsigned i = 0; i < cluster.size(); ++i) {
+        const auto& [_anc_count, idx] = mapping[i];
+        S parents;
+        S cover;
+        cover.Set(idx);
+        for (unsigned j = 0; j < i; ++j) {
+            const auto& [_anc_count_j, idx_j] = mapping[i - 1 - j];
+            if (ancs[idx][idx_j] && !cover[idx_j]) {
+                parents.Set(idx_j);
+                cover |= ancs[idx_j];
+            }
+        }
+#if DEBUG_LINEARIZE
+        assert(cover == ancs[idx]);
+#endif
+        cluster[idx].second = std::move(parents);
+    }
+}
+
+/** Construct a new cluster with done removed (leaving the rest in order). */
+template<typename S>
+Cluster<S> TrimCluster(const Cluster<S>& cluster, const S& done)
+{
+    Cluster<S> ret;
+    std::vector<unsigned> mapping;
+    mapping.resize(cluster.size());
+    ret.reserve(cluster.size() - done.Count());
+    for (unsigned idx : S::Fill(cluster.size()) / done) {
+        mapping[idx] = ret.size();
+        ret.push_back(cluster[idx]);
+    }
+    for (unsigned i = 0; i < ret.size(); ++i) {
+        S parents;
+        for (unsigned idx : ret[i].second / done) {
+            parents.Set(mapping[idx]);
+        }
+        ret[i].second = std::move(parents);
+    }
+    return ret;
+}
+
+/** Minimize a cluster, and serialize to byte vector. */
+template<typename S>
+std::vector<unsigned char> DumpCluster(Cluster<S> cluster)
+{
+    AncestorSets<S> anc(cluster);
+    WeedCluster(cluster, anc);
+    std::vector<unsigned char> data;
+    SerializeCluster(cluster, data);
+    data.pop_back();
+    return data;
+}
+
+/** Test whether an ancestor set was computed from an acyclic cluster. */
+template<typename S>
+bool IsAcyclic(const AncestorSets<S>& anc)
+{
+    for (unsigned i = 0; i < anc.Size(); ++i) {
+        // Determine if there is a j<i which i has as ancestor, and which has i as ancestor.
+        for (unsigned j : anc[i]) {
+            if (j >= i) break;
+            if (anc[j][i]) return false;
+        }
+    }
+    return true;
+}
+
 
 } // namespace
 
