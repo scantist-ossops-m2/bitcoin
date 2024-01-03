@@ -597,7 +597,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
     FuzzBitSet all = FuzzBitSet::Fill(cluster.size());
     bool connected = IsConnectedSubset(cluster, all);
 
-#if 1
+#if 0
     auto prelin = LinearizeCluster(cluster, 0, 0).linearization;
     PostLinearization(cluster, prelin);
     ReorderedCluster<FuzzBitSet> sorted(cluster, prelin);
@@ -628,7 +628,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
     FuzzBitSet done;
     while (done != all) {
         CandidateSetAnalysis<FuzzBitSet> ret;
-#if 1
+#if 0
         ret = FindBestCandidateSetFancy(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
 #else
         ret = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, {}, 0);
