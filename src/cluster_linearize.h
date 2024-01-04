@@ -343,8 +343,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
      * - inc_feefrac: equal to ComputeSetFeeFrac(cluster, inc / done).
      * - pot_feefrac: equal to ComputeSetFeeFrac(cluster, pot / done).
      * - inc_may_be_best: whether the possibility exists that inc_feefrac > best_feefrac.
+     * - consider_inc: subset of (pot / inc) to consider adding to inc through jump ahead.
      */
-    auto add_fn = [&](const S& init_inc, const S& exc, S&& pot, FeeFrac&& inc_feefrac, FeeFrac&& pot_feefrac, bool inc_may_be_best) {
+    auto add_fn = [&](const S& init_inc, const S& exc, S pot, FeeFrac inc_feefrac, FeeFrac pot_feefrac, bool inc_may_be_best, S consider_inc) {
         // Add missing entries to pot (and pot_feefrac). We iterate over all undecided transactions
         // excluding pot whose feerate is higher than best_feefrac.
         for (unsigned pos : potential_mask / (pot | exc)) {
@@ -356,14 +357,15 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             }
             pot_feefrac += cluster[pos].first;
             pot.Set(pos);
+            consider_inc.Set(pos);
         }
 
         // If (pot / done) is empty, this is certainly uninteresting to work on.
         if (pot_feefrac.IsEmpty()) return;
 
-        // If any transaction in pot has only missing ancestors in pot, add it (and its ancestors)
-        // to inc. This is legal because any topologically-valid subset of pot must be part of the
-        // best possible candidate reachable from this state. To see this:
+        // If any transaction in consider_inc has only missing ancestors in pot, add it (and its
+        // ancestors) to inc. This is legal because any topologically-valid subset of pot must be
+        // part of the best possible candidate reachable from this state. To see this:
         // - The feefrac of every element of (pot / inc) is higher than that of (pot / done),
         //   which on its turn is higher than that of (inc / done).
         // - Thus, the feefrac of any non-empty subset of (pot / inc) is higher than that of the
@@ -377,7 +379,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         bool updated_inc{false};
         S inc = init_inc;
         // Iterate over all transactions in pot that are not yet included in inc.
-        for (unsigned pos : pot / inc) {
+        for (unsigned pos : consider_inc) {
             // If that transaction's ancestors are a subset of pot, and the transaction is
             // (still) not part of inc, we can merge it together with its ancestors to inc.
             if (!inc[pos] && (pot >> anc[pos])) {
@@ -467,9 +469,9 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         // ancestor feerate transaction. This guarantees that regardless of how many iterations
         // are performed later, the best found is always at least as good as the best ancestor set.
         auto exclude_others = todo / component;
-        add_fn(done, after | desc[best_ancestor_tx] | exclude_others, S{done}, {}, {}, false);
+        add_fn(done, after | desc[best_ancestor_tx] | exclude_others, S{done}, {}, {}, false, {});
         auto inc{done | anc[best_ancestor_tx]};
-        add_fn(inc, after | exclude_others, S{inc}, FeeFrac{best_ancestor_feefrac}, std::move(best_ancestor_feefrac), true);
+        add_fn(inc, after | exclude_others, S{inc}, FeeFrac{best_ancestor_feefrac}, std::move(best_ancestor_feefrac), true, {});
         // Update the set of transactions to cover, and finish if there are none left.
         to_cover /= component;
         if (to_cover.None()) break;
@@ -522,7 +524,13 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
 
         // Consider adding a work item corresponding to that transaction excluded. As nothing is
         // being added to inc, this new entry cannot be a new best.
-        add_fn(inc, exc | desc[pos], pot / desc[pos], FeeFrac{inc_feefrac}, pot_feefrac - ComputeSetFeeFrac(cluster, pot & desc[pos]), false);
+        add_fn(/*init_inc=*/inc,
+               /*exc=*/exc | desc[pos],
+               /*pot=*/pot / desc[pos],
+               /*inc_feefrac=*/inc_feefrac,
+               /*pot_feefrac=*/pot_feefrac - ComputeSetFeeFrac(cluster, pot & desc[pos]),
+               /*inc_may_be_best=*/false,
+               /*consider_inc=*/{});
 
         // Consider adding a work item corresponding to that transaction included. Since only
         // connected subgraphs can be optimal candidates, if there is no overlap between the
@@ -532,12 +540,13 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         // due to the preseeding with the best ancestor set, we know that anything better must
         // necessarily consist of the union of at least two ancestor sets, and this is not a
         // concern.
-        bool may_be_new_best = !(done >> (inc & anc[pos]));
-        inc_feefrac += ComputeSetFeeFrac(cluster, anc[pos] / inc);
-        pot_feefrac += ComputeSetFeeFrac(cluster, anc[pos] / pot);
-        inc |= anc[pos];
-        pot |= anc[pos];
-        add_fn(inc, exc, std::move(pot), std::move(inc_feefrac), std::move(pot_feefrac), may_be_new_best);
+        add_fn(/*init_inc=*/inc | anc[pos],
+               /*exc=*/exc,
+               /*pot=*/pot | anc[pos],
+               /*inc_feefrac=*/inc_feefrac + ComputeSetFeeFrac(cluster, anc[pos] / inc),
+               /*pot_feefrac=*/pot_feefrac + ComputeSetFeeFrac(cluster, anc[pos] / pot),
+               /*inc_may_be_best=*/!(done >> (inc & anc[pos])),
+               /*consider_inc=*/pot / inc);
     }
 
     // Return the best seen candidate set.
