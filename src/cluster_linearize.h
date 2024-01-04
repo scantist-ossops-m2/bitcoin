@@ -319,7 +319,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
     using QueueElem = std::tuple<S, S, S, FeeFrac, FeeFrac>;
     /** Queues with work items. */
     static constexpr unsigned NUM_QUEUES = 1;
-    std::vector<QueueElem> queue[NUM_QUEUES];
+    std::deque<QueueElem> queue[NUM_QUEUES];
     /** Sum of total number of queue items across all queues. */
     unsigned queue_tot{0};
     /** Very fast local random number generator. */
@@ -328,6 +328,8 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
     S best_candidate;
     /** Equal to ComputeSetFeeFrac(cluster, best_candidate / done). */
     FeeFrac best_feefrac;
+    /** Transactions which have feerate > best_feefrac. */
+    S potential_mask = todo;
     /** The number of insertions so far into the queues in total. */
     unsigned insert_count{0};
 
@@ -344,8 +346,8 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
      */
     auto add_fn = [&](const S& init_inc, const S& exc, S&& pot, FeeFrac&& inc_feefrac, FeeFrac&& pot_feefrac, bool inc_may_be_best) {
         // Add missing entries to pot (and pot_feefrac). We iterate over all undecided transactions
-        // excluding pot.
-        for (unsigned pos : todo / (pot | exc)) {
+        // excluding pot whose feerate is higher than best_feefrac.
+        for (unsigned pos : potential_mask / (pot | exc)) {
             // Determine if adding transaction pos to pot (ignoring topology) would improve it. If
             // not, we're done updating pot.
             if (!pot_feefrac.IsEmpty()) {
@@ -405,6 +407,12 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             if (new_best) {
                 best_feefrac = inc_feefrac;
                 best_candidate = inc;
+                while (potential_mask.Any()) {
+                    unsigned check = potential_mask.Last();
+                    ++ret.comparisons;
+                    if (cluster[check].first >> best_feefrac) break;
+                    potential_mask.Reset(check);
+                }
             }
         }
 
@@ -477,24 +485,16 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             queue_idx = rng() % NUM_QUEUES;
         } while (queue[queue_idx].empty());
 
+        // Move the work item from the queue to local variables, popping it.
+        auto [inc, exc, pot, inc_feefrac, pot_feefrac] = std::move(queue[queue_idx].front());
+        queue[queue_idx].pop_front();
+        --queue_tot;
+
         // If this item's potential feefrac is not better than the best seen so far, drop it.
-        const auto& pot_feefrac_ref = std::get<4>(queue[queue_idx].back());
-#if DEBUG_LINEARIZE
-        assert(pot_feefrac_ref.size > 0);
-#endif
         if (!best_feefrac.IsEmpty()) {
             ++ret.comparisons;
-            if (pot_feefrac_ref <= best_feefrac) {
-                queue[queue_idx].pop_back();
-                --queue_tot;
-                continue;
-            }
+            if (pot_feefrac <= best_feefrac) continue;
         }
-
-        // Move the work item from the queue to local variables, popping it.
-        auto [inc, exc, pot, inc_feefrac, pot_feefrac] = std::move(queue[queue_idx].back());
-        queue[queue_idx].pop_back();
-        --queue_tot;
 
         // Decide which transaction to split on (create new work items; one with it included, one
         // with it excluded).
@@ -511,7 +511,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         unsigned first = remain.First();
         auto select = remain & (anc[first] | desc[first]);
         for (unsigned i : select) {
-//            if (inc != done && (done >> (inc & anc[i]))) continue;
             std::pair<unsigned, unsigned> counts{(remain / anc[i]).Count(), (remain / desc[i]).Count()};
             if (counts.first < counts.second) std::swap(counts.first, counts.second);
             if (!pos_counts.has_value() || counts < *pos_counts) {
