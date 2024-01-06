@@ -580,7 +580,7 @@ FUZZ_TARGET(clustermempool_efficient_limits)
 {
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer_tmp);
-    if (cluster.size() > 15) return;
+    if (cluster.size() > 20) return;
     if (!IsMul64Compatible(cluster)) return;
 
 #if 0

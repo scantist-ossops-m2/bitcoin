@@ -288,6 +288,8 @@ CandidateSetAnalysis<S> FindBestAncestorSet(const Cluster<S>& cluster, const Anc
     return ret;
 }
 
+#define CANDIDATE_PRESPLIT_ANC
+
 /** An efficient algorithm for finding the best candidate set. Believed to be O(~1.6^n).
  *
  * cluster must be sorted (see SortedCluster) by individual feerate, and anc/desc/done must use
@@ -451,6 +453,8 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             if (prev_component == component) break;
             added = component / prev_component;
         }
+        auto exclude_others = todo / component;
+#ifdef CANDIDATE_PRESPLIT_ANC
         // Find highest ancestor feerate transaction in the component using the precomputed values.
         FeeFrac best_ancestor_feefrac;
         unsigned best_ancestor_tx{0};
@@ -468,10 +472,12 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         // Add queue entries corresponding to the inclusion and the exclusion of that highest
         // ancestor feerate transaction. This guarantees that regardless of how many iterations
         // are performed later, the best found is always at least as good as the best ancestor set.
-        auto exclude_others = todo / component;
-        add_fn(done, after | desc[best_ancestor_tx] | exclude_others, S{done}, {}, {}, false, {});
+        add_fn(done, after | desc[best_ancestor_tx] | exclude_others, done, {}, {}, false, {});
         auto inc{done | anc[best_ancestor_tx]};
-        add_fn(inc, after | exclude_others, S{inc}, FeeFrac{best_ancestor_feefrac}, std::move(best_ancestor_feefrac), true, {});
+        add_fn(inc, after | exclude_others, inc, best_ancestor_feefrac, best_ancestor_feefrac, true, {});
+#else
+        add_fn(done, after | exclude_others, done, {}, {}, false, {});
+#endif
         // Update the set of transactions to cover, and finish if there are none left.
         to_cover /= component;
         if (to_cover.None()) break;
@@ -479,8 +485,6 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
 
     // Work processing loop.
     while (queue_tot) {
-        ++ret.iterations;
-
         // Find a queue to pop a work item from.
         unsigned queue_idx;
         do {
@@ -497,6 +501,8 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             ++ret.comparisons;
             if (pot_feefrac <= best_feefrac) continue;
         }
+
+        ++ret.iterations;
 
         // Decide which transaction to split on (create new work items; one with it included, one
         // with it excluded).
@@ -545,7 +551,11 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
                /*pot=*/pot | anc[pos],
                /*inc_feefrac=*/inc_feefrac + ComputeSetFeeFrac(cluster, anc[pos] / inc),
                /*pot_feefrac=*/pot_feefrac + ComputeSetFeeFrac(cluster, anc[pos] / pot),
+#ifdef CANDIDATE_PRESPLIT_ANC
                /*inc_may_be_best=*/!(done >> (inc & anc[pos])),
+#else
+               /*inc_may_be_best=*/!(done >> (inc & anc[pos])) || (done == inc),
+#endif
                /*consider_inc=*/pot / inc);
     }
 
@@ -1304,7 +1314,6 @@ LinearizationResult LinearizeCluster(const Cluster<S>& cluster, unsigned optimal
             // Find bottlenecks in the current graph.
             auto bottlenecks = todo;
             for (unsigned i : todo) {
-                ++ret.iterations;
                 bottlenecks &= (anc[i] | desc[i]);
                 if (bottlenecks.None()) break;
             }
