@@ -331,7 +331,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
     /** Equal to ComputeSetFeeFrac(cluster, best_candidate / done). */
     FeeFrac best_feefrac;
     /** Transactions which have feerate > best_feefrac. */
-    S potential_mask = todo;
+    S imp = todo;
     /** The number of insertions so far into the queues in total. */
     unsigned insert_count{0};
 
@@ -350,7 +350,7 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
     auto add_fn = [&](const S& init_inc, const S& exc, S pot, FeeFrac inc_feefrac, FeeFrac pot_feefrac, bool inc_may_be_best, S consider_inc) {
         // Add missing entries to pot (and pot_feefrac). We iterate over all undecided transactions
         // excluding pot whose feerate is higher than best_feefrac.
-        for (unsigned pos : potential_mask / (pot | exc)) {
+        for (unsigned pos : imp / (pot | exc)) {
             // Determine if adding transaction pos to pot (ignoring topology) would improve it. If
             // not, we're done updating pot.
             if (!pot_feefrac.IsEmpty()) {
@@ -411,11 +411,11 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
             if (new_best) {
                 best_feefrac = inc_feefrac;
                 best_candidate = inc;
-                while (potential_mask.Any()) {
-                    unsigned check = potential_mask.Last();
+                while (imp.Any()) {
+                    unsigned check = imp.Last();
                     ++ret.comparisons;
                     if (cluster[check].first >> best_feefrac) break;
-                    potential_mask.Reset(check);
+                    imp.Reset(check);
                 }
             }
         }
