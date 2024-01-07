@@ -507,17 +507,17 @@ CandidateSetAnalysis<S> FindBestCandidateSetEfficient(const Cluster<S>& cluster,
         // Decide which transaction to split on (create new work items; one with it included, one
         // with it excluded).
         //
-        // Among the (undecided) ancestors and descendants of the best individual feefrac undecided
-        // transaction, pick the one which:
+        // Among the (undecided) ancestors of the highest individual feefrac transaction, pick the
+        // one which reduces the search space most:
         // - Minimizes the size of the largest of the undecided sets after including or excluding.
         // - If the above is equal, the one that minimizes the other branch's undecided set size.
         // - If the above are equal, the one with the best individual feefrac.
         unsigned pos = 0;
-        std::optional<std::pair<unsigned, unsigned>> pos_counts;
         auto remain = todo / inc;
         remain /= exc;
         unsigned first = remain.First();
-        auto select = remain & (anc[first] | desc[first]);
+        auto select = remain & anc[first];
+        std::optional<std::pair<unsigned, unsigned>> pos_counts;
         for (unsigned i : select) {
             std::pair<unsigned, unsigned> counts{(remain / anc[i]).Count(), (remain / desc[i]).Count()};
             if (counts.first < counts.second) std::swap(counts.first, counts.second);
