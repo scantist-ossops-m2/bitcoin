@@ -928,15 +928,11 @@ LinearizationResult LinearizeCluster(const Cluster<S>& cluster, unsigned optimal
     LinearizationResult ret;
     ret.linearization.reserve(cluster.size());
     auto all = S::Fill(cluster.size());
+    S done;
+    unsigned left = (all / done).Count();
 
     /** Very fast local random number generator. */
     XoRoShiRo128PlusPlus rng(seed);
-
-    std::vector<std::tuple<S, S, bool, std::optional<unsigned>>> queue;
-    queue.reserve(cluster.size() * 2);
-    queue.emplace_back(S{}, S{}, true, std::nullopt);
-    std::vector<unsigned> bottleneck_list;
-    bottleneck_list.reserve(cluster.size());
 
     // Precompute stuff.
     SortedCluster<S> sorted(cluster);
@@ -949,60 +945,19 @@ LinearizationResult LinearizeCluster(const Cluster<S>& cluster, unsigned optimal
     }
     AncestorSetFeeFracs anc_feefracs(sorted.cluster, anc, {});
 
-    while (!queue.empty()) {
-        auto [done, after, maybe_bottlenecks, single] = queue.back();
-        queue.pop_back();
-
-        if (single) {
-            ret.linearization.push_back(*single);
-            anc_feefracs.Done(sorted.cluster, desc, *single);
-            continue;
-        }
-
-        auto todo = all / (done | after);
-        if (todo.None()) continue;
-        unsigned left = todo.Count();
-
-        if (left == 1) {
-            unsigned idx = todo.First();
-            ret.linearization.push_back(idx);
-            anc_feefracs.Done(sorted.cluster, desc, idx);
-            continue;
-        }
-
-        if (maybe_bottlenecks) {
-            // Find bottlenecks in the current graph.
-            auto bottlenecks = todo;
-            for (unsigned i : todo) {
-                bottlenecks &= (anc[i] | desc[i]);
-                if (bottlenecks.None()) break;
-            }
-
-            if (bottlenecks.Any()) {
-                bottleneck_list.clear();
-                for (unsigned i : bottlenecks) bottleneck_list.push_back(i);
-                std::sort(bottleneck_list.begin(), bottleneck_list.end(), [&](unsigned a, unsigned b) { return anccount[a] > anccount[b]; });
-                for (unsigned i : bottleneck_list) {
-                    queue.emplace_back(done | anc[i], after, false, std::nullopt);
-                    queue.emplace_back(S{}, S{}, false, i);
-                    after |= desc[i];
-                }
-                queue.emplace_back(done, after, false, std::nullopt);
-                continue;
-            }
-        }
-
+    while (done != all) {
+        // Find candidate set.
         CandidateSetAnalysis<S> analysis;
         if (left > optimal_limit) {
-            analysis = FindBestAncestorSet(sorted.cluster, anc, anc_feefracs, done, after);
+            analysis = FindBestAncestorSet(sorted.cluster, anc, anc_feefracs, done, {});
         } else {
-            analysis = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, after, rng() ^ ret.iterations);
+            analysis = FindBestCandidateSetEfficient(sorted.cluster, anc, desc, anc_feefracs, done, {}, rng() ^ ret.iterations);
         }
 
         // Sanity checks.
 #if DEBUG_LINEARIZE
         assert(analysis.best_candidate_set.Any()); // Must be at least one transaction
-        assert(!(analysis.best_candidate_set && (done | after))); // Cannot overlap with processed ones.
+        assert(!(analysis.best_candidate_set && done)); // Cannot overlap with processed ones.
 #endif
 
         // Update statistics.
@@ -1021,8 +976,8 @@ LinearizationResult LinearizeCluster(const Cluster<S>& cluster, unsigned optimal
 
         // Update bookkeeping
         done |= analysis.best_candidate_set;
+        left -= analysis.best_candidate_set.Count();
         anc_feefracs.Done(sorted.cluster, desc, analysis.best_candidate_set);
-        queue.emplace_back(done, after, true, std::nullopt);
     }
 
     // Map linearization back from sorted cluster indices to original indices.
