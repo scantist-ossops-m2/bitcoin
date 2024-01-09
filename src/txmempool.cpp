@@ -1249,21 +1249,6 @@ std::vector<CTxMemPool::txiter> CTxMemPool::GatherClusters(const std::vector<uin
     return clustered_txs;
 }
 
-void BuildDiagramFromUnsortedChunks(std::vector<FeeFrac>& chunks, std::vector<FeeFrac>& diagram)
-{
-    diagram.clear();
-    // Finish by sorting the chunks we calculated, and then accumulating them.
-    std::sort(chunks.begin(), chunks.end(), [](const FeeFrac& a, const FeeFrac& b) { return a > b; });
-
-    // And now build the diagram for these chunks.
-    diagram.emplace_back(FeeFrac{0, 0});
-    for (auto& chunk : chunks) {
-        FeeFrac& last = diagram.back();
-        diagram.emplace_back(FeeFrac{last.fee+chunk.fee, last.size+chunk.size});
-    }
-    return;
-}
-
 std::optional<std::string> CTxMemPool::CheckConflictTopology(const setEntries& direct_conflicts)
 {
     for (const auto& direct_conflict : direct_conflicts) {
