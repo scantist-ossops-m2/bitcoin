@@ -1307,6 +1307,11 @@ std::optional<std::string> CTxMemPool::CalculateFeerateDiagramsForRBF(CAmount re
 
     std::vector<FeeFrac> old_chunks;
     // Step 1: build the old diagram.
+
+    // The above clusters are all trivially linearized;
+    // they have a strict topology of 1 or two connected transactions.
+
+    // Compute OLD chunks for all clusters
     for (auto txiter : all_conflicts) {
         // Does this transaction have descendants?
         if (txiter->GetCountWithDescendants() > 1) {
@@ -1334,11 +1339,14 @@ std::optional<std::string> CTxMemPool::CalculateFeerateDiagramsForRBF(CAmount re
         }
     }
 
+    // No topology restrictions post-chunking; sort
     BuildDiagramFromUnsortedChunks(old_chunks, old_diagram);
 
     std::vector<FeeFrac> new_chunks;
 
-    // Step 2: build the new diagram
+    // Step 2: build the NEW = OLD - CON + CNK diagram
+
+    // OLD - CON: Any parents of direct conflicts that are not conflicted themselves
     for (auto direct_conflict : direct_conflicts) {
         // If a direct conflict has an ancestor that is not in all_conflicts,
         // it can be affected by the replacement of the child.
@@ -1352,6 +1360,7 @@ std::optional<std::string> CTxMemPool::CalculateFeerateDiagramsForRBF(CAmount re
             }
         }
     }
+    // + CNK
     new_chunks.emplace_back(FeeFrac{replacement_fees, int32_t(replacement_vsize)});
 
     BuildDiagramFromUnsortedChunks(new_chunks, new_diagram);
