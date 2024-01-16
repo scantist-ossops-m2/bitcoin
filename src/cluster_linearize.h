@@ -1059,9 +1059,9 @@ Cluster<S> DeserializeCluster(Span<const unsigned char>& data)
 {
     Cluster<S> ret;
     while (true) {
-        uint32_t size = DeserializeNumberBase128(data) & 0x3fffff;
+        int32_t size = DeserializeNumberBase128(data) & 0x3fffff;
         if (size == 0) break;
-        uint64_t fee = DeserializeNumberBase128(data) & 0x7ffffffffffff;
+        int64_t fee = DeserializeNumberBase128(data) & 0x7ffffffffffff;
         S parents;
         while (true) {
             unsigned read = DeserializeNumberBase128(data);

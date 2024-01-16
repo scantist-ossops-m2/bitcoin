@@ -40,23 +40,6 @@ void DrawCluster(std::ostream& o, const Cluster<S>& cluster)
     o << "}";
 }
 
-template<typename S>
-bool IsMul64Compatible(const Cluster<S>& c)
-{
-    uint64_t sum_fee{0};
-    uint32_t sum_size{0};
-    for (const auto& [fee_and_size, _parents] : c) {
-        sum_fee += fee_and_size.fee;
-        if (sum_fee < fee_and_size.fee) return false;
-        sum_size += fee_and_size.size;
-        if (sum_size < fee_and_size.size) return false;
-    }
-    uint64_t high = (sum_fee >> 32) * sum_size;
-    uint64_t low = (sum_fee & 0xFFFFFFFF) * sum_size;
-    high += low >> 32;
-    return (high >> 30) == 0;
-}
-
 /** Union-Find data structure. */
 template<typename SizeType, SizeType Size>
 class UnionFind
@@ -365,7 +348,6 @@ FUZZ_TARGET(clustermempool_exhaustive_equals_naive)
     // Read cluster from fuzzer.
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 15) return;
-    if (!IsMul64Compatible(cluster)) return;
 
     // Compute ancestor sets.
     AncestorSets anc(cluster);
@@ -397,7 +379,6 @@ FUZZ_TARGET(clustermempool_efficient_equals_exhaustive)
     // Read cluster from fuzzer.
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() >= FuzzBitSet::Size()) return;
-    if (!IsMul64Compatible(cluster)) return;
     // Compute ancestor sets.
     AncestorSets anc(cluster);
     if (!IsAcyclic(anc)) return;
@@ -436,7 +417,6 @@ template<typename BS>
 void LinearizeBenchmark(Span<const unsigned char> buffer)
 {
     auto cluster = DeserializeCluster<BS>(buffer);
-    if (!IsMul64Compatible(cluster)) return;
 
     AncestorSets<BS> anc(cluster);
     if (!IsAcyclic(anc)) return;
@@ -462,7 +442,6 @@ FUZZ_TARGET(clustermempool_linearize_benchmark)
 {
     auto buffer_copy = buffer;
     auto cluster_small = DeserializeCluster<BitSet<64>>(buffer_copy);
-    if (!IsMul64Compatible(cluster_small)) return;
 
     if (cluster_small.size() <= 32) {
         LinearizeBenchmark<BitSet<32>>(buffer);
@@ -540,7 +519,6 @@ FUZZ_TARGET(clustermempool_weedcluster)
 FUZZ_TARGET(clustermempool_trim)
 {
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
-    if (!IsMul64Compatible(cluster)) return;
     if (cluster.size() > 20) return;
 
     FuzzBitSet all = FuzzBitSet::Fill(cluster.size());
@@ -581,7 +559,6 @@ FUZZ_TARGET(clustermempool_efficient_limits)
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer_tmp);
     if (cluster.size() > 20) return;
-    if (!IsMul64Compatible(cluster)) return;
 
 #if 0
     for (unsigned i = 0; i < cluster.size(); ++i) {
@@ -844,7 +821,6 @@ FUZZ_TARGET(clustermempool_linearize_optimal)
 {
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 18) return;
-    if (!IsMul64Compatible(cluster)) return;
 
     FuzzBitSet all = FuzzBitSet::Fill(cluster.size());
     if (!IsConnectedSubset(cluster, all)) return;
@@ -874,7 +850,6 @@ template<typename BS>
 LinearizationResult LinearizeAncLimit(Span<const unsigned char> buffer)
 {
     auto cluster = DeserializeCluster<BS>(buffer);
-    if (!IsMul64Compatible(cluster)) return {};
 
     AncestorSets<BS> anc(cluster);
     if (!IsAcyclic(anc)) return {};
@@ -893,7 +868,6 @@ FUZZ_TARGET(clustermempool_linearize_anclimit)
 {
     auto buffer_tmp = buffer;
     auto cluster_small = DeserializeCluster<BitSet<64>>(buffer_tmp);
-    if (!IsMul64Compatible(cluster_small)) return;
 
     LinearizationResult lin;
     if (cluster_small.size() <= 32) {
@@ -950,7 +924,6 @@ FUZZ_TARGET(clustermempool_add_bottom_improves)
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 12) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
     DescendantSets<FuzzBitSet> desc(anc);
@@ -1033,50 +1006,6 @@ std::vector<FeeFrac> GetLinearizationDiagram(const std::vector<std::pair<FeeFrac
     return ret;
 }
 
-int CompareFeeFracWithDiagram(const FeeFrac& ff, Span<const FeeFrac> diagram)
-{
-    assert(diagram.size() > 0);
-    unsigned not_above = 0;
-    unsigned not_below = diagram.size() - 1;
-    if (ff.size < diagram[not_above].size) return 0;
-    if (ff.size > diagram[not_below].size) return 0;
-    while (not_below > not_above + 1) {
-        unsigned mid = (not_below + not_above) / 2;
-        if (diagram[mid].size <= ff.size) not_above = mid;
-        if (diagram[mid].size >= ff.size) not_below = mid;
-    }
-    if (not_below == not_above) {
-        if (ff.fee > diagram[not_below].fee) return 1;
-        if (ff.fee < diagram[not_below].fee) return -1;
-        return 0;
-    }
-    uint64_t left = ff.fee*diagram[not_below].size + diagram[not_above].fee*ff.size + diagram[not_below].fee*diagram[not_above].size;
-    uint64_t right = ff.size*diagram[not_below].fee + diagram[not_above].size*ff.fee + diagram[not_below].size*diagram[not_above].fee;
-    if (left > right) return 1;
-    if (left < right) return -1;
-    return 0;
-}
-
-std::optional<int> CompareDiagrams(Span<const FeeFrac> dia1, Span<const FeeFrac> dia2)
-{
-    bool all_ge = true;
-    bool all_le = true;
-    for (const auto p1 : dia1) {
-        int cmp = CompareFeeFracWithDiagram(p1, dia2);
-        if (cmp < 0) all_ge = false;
-        if (cmp > 0) all_le = false;
-    }
-    for (const auto p2 : dia2) {
-        int cmp = CompareFeeFracWithDiagram(p2, dia1);
-        if (cmp < 0) all_le = false;
-        if (cmp > 0) all_ge = false;
-    }
-    if (all_ge && all_le) return 0;
-    if (all_ge && !all_le) return 1;
-    if (!all_ge && all_le) return -1;
-    return std::nullopt;
-}
-
 /** Determine chunk feerate for every transaction. 0/0 for non-included ones. */
 template<typename BS>
 std::vector<FeeFrac> GetChunkFeerates(const Cluster<BS>& cluster, BS done, BS after)
@@ -1109,7 +1038,6 @@ FUZZ_TARGET(clustermempool_replacement_heuristic)
     auto buffer_tmp = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 7) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
     DescendantSets<FuzzBitSet> desc(anc);
@@ -1157,7 +1085,6 @@ FUZZ_TARGET(clustermempool_postlinearize)
 {
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 10) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
     auto lin_pre = DecodeLinearization(buffer, cluster);
@@ -1185,9 +1112,8 @@ FUZZ_TARGET(clustermempool_postlinearize)
 
     auto diag_pre = GetLinearizationDiagram(chunks_pre);
     auto diag_post = GetLinearizationDiagram(chunks_post);
-    auto cmp = CompareDiagrams(diag_post, diag_pre);
-    assert(cmp.has_value());
-    assert(cmp == 0 || cmp == 1);
+    auto cmp = CompareFeerateDiagram(diag_post, diag_pre);
+    assert(cmp >= 0);
 
     for (const auto& [_feerate, chunk] : chunks_post) {
         assert(IsConnectedSubset(cluster, chunk));
@@ -1199,7 +1125,6 @@ FUZZ_TARGET(clustermempool_postlinearize_maxswaps)
     auto buffer_old = buffer;
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 16) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
     FuzzBitSet all = FuzzBitSet::Fill(cluster.size());
@@ -1236,7 +1161,6 @@ FUZZ_TARGET(clustermempool_merge_supremacy)
     // Construct a cluster (not necessarily connected)
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() > 24) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
 
@@ -1255,7 +1179,7 @@ FUZZ_TARGET(clustermempool_merge_supremacy)
     auto diag2 = GetLinearizationDiagram(chunk2);
 
     // Compare the diagrams.
-    auto cmp12 = CompareDiagrams(diag1, diag2);
+    auto cmp12 = CompareFeerateDiagram(diag1, diag2);
 
     // Construct the merged linearization and compute its diagram.
     auto linm = MergeLinearizations(cluster, lin1, lin2);
@@ -1265,15 +1189,15 @@ FUZZ_TARGET(clustermempool_merge_supremacy)
     auto diagm = GetLinearizationDiagram(chunkm);
 
     // Verify that the new diagram is at least as good as both inputs.
-    auto cmpm1 = CompareDiagrams(diagm, diag1);
-    auto cmpm2 = CompareDiagrams(diagm, diag2);
+    auto cmpm1 = CompareFeerateDiagram(diagm, diag1);
+    auto cmpm2 = CompareFeerateDiagram(diagm, diag2);
     assert(cmpm1 >= 0);
     assert(cmpm2 >= 0);
 
     // If the inputs were incomparable, the result must be better than both inputs.
-    if (!cmp12.has_value()) {
-        assert(cmpm1 == 1);
-        assert(cmpm2 == 1);
+    if (cmp12 == std::partial_ordering::unordered) {
+        assert(cmpm1 > 0);
+        assert(cmpm2 > 0);
     }
 }
 
@@ -1301,7 +1225,6 @@ FUZZ_TARGET(clustermempool_gathering_theorem)
         cluster.back().first.size = size;
         cluster.back().first.fee = fee;
     }
-    if (!IsMul64Compatible(cluster)) return;
 
     // The initial linearization of all its transactions (just use cluster order).
     std::vector<unsigned> lin(cluster.size());
@@ -1336,7 +1259,7 @@ FUZZ_TARGET(clustermempool_gathering_theorem)
     auto chunknew = ChunkLinearization(cluster, linnew);
     auto diagnew = GetLinearizationDiagram(chunknew);
     // Require it to be at least as good as the origin linearization.
-    assert(CompareDiagrams(diagnew, diag) >= 0);
+    assert(CompareFeerateDiagram(diagnew, diag) >= 0);
 
     // Construct the diagram with just the original chunks, but good added to
     // each. Note that this isn't the same as the new diagram, because no
@@ -1352,9 +1275,9 @@ FUZZ_TARGET(clustermempool_gathering_theorem)
     assert(precomb == FuzzBitSet::Fill(cluster.size()));
 
     // Require this pre-rechunked diagram to be at least as good as the original.
-    assert(CompareDiagrams(diagpre, diag) >= 0);
+    assert(CompareFeerateDiagram(diagpre, diag) >= 0);
     // Require the final diagram to be at least as good as the pre-rechunked one.
-    assert(CompareDiagrams(diagnew, diagpre) >= 0);
+    assert(CompareFeerateDiagram(diagnew, diagpre) >= 0);
 }
 
 FUZZ_TARGET(clustermempool_minimal_nonoptimal_postancestor)
@@ -1366,7 +1289,6 @@ FUZZ_TARGET(clustermempool_minimal_nonoptimal_postancestor)
         feefrac.fee = 1 + (feefrac.fee % 5);
     }
     if (cluster.size() > 5) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
     if (!IsConnectedSubset(cluster, FuzzBitSet::Fill(cluster.size()))) return;
@@ -1383,7 +1305,7 @@ FUZZ_TARGET(clustermempool_minimal_nonoptimal_postancestor)
     auto diag_anc = GetLinearizationDiagram(chunk_anc);
 
     // Compare and assert equality.
-    auto cmp = CompareDiagrams(diag_opt, diag_anc);
+    auto cmp = CompareFeerateDiagram(diag_opt, diag_anc);
     assert(cmp >= 0); // Optimal is always at least as good, duh.
 
     if (cmp > 0) {
@@ -1403,7 +1325,6 @@ FUZZ_TARGET(clustermempool_merge_own_postprocessing)
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.empty()) return;
     if (cluster.size() > 10) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
     if (!IsConnectedSubset(cluster, FuzzBitSet::Fill(cluster.size()))) return;
@@ -1427,7 +1348,7 @@ FUZZ_TARGET(clustermempool_merge_own_postprocessing)
     VerifyChunking(chunk_merge, cluster);
     auto diag_merge = GetLinearizationDiagram(chunk_merge);
 
-    auto cmp = CompareDiagrams(diag_merge, diag_post);
+    auto cmp = CompareFeerateDiagram(diag_merge, diag_post);
     assert(cmp >= 0);
 
     if (cmp != 0) {
@@ -1445,7 +1366,6 @@ FUZZ_TARGET(clustermempool_linearization_stripping_theorem)
     Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
     if (cluster.size() <= 1) return;
     if (cluster.size() > 20) return;
-    if (!IsMul64Compatible(cluster)) return;
     AncestorSets<FuzzBitSet> anc(cluster);
     if (!IsAcyclic(anc)) return;
 
@@ -1475,7 +1395,7 @@ FUZZ_TARGET(clustermempool_linearization_stripping_theorem)
     for (unsigned i = 0; i < prefix_len; ++i) assert(lin1[i] == lin2[i]);
 
     // Compare
-    auto cmp_full = CompareDiagrams(diag1, diag2);
+    auto cmp_full = CompareFeerateDiagram(diag1, diag2);
 
     // Construct the distinct suffices of the linearizations.
     std::vector<unsigned> lin1suf{lin1.begin() + prefix_len, lin1.end()};
@@ -1486,11 +1406,11 @@ FUZZ_TARGET(clustermempool_linearization_stripping_theorem)
     auto diag2suf = GetLinearizationDiagram(chunk2suf);
 
     // Compare
-    auto cmp_suf = CompareDiagrams(diag1suf, diag2suf);
+    auto cmp_suf = CompareFeerateDiagram(diag1suf, diag2suf);
 
-    if (cmp_suf.has_value()) {
-        assert(cmp_full.has_value());
-        if (*cmp_suf >= 0) assert(*cmp_full >= 0);
-        if (*cmp_suf <= 0) assert(*cmp_full <= 0);
+    if (cmp_suf == std::partial_ordering::unordered) {
+        assert(cmp_full != std::partial_ordering::unordered);
+        if (cmp_suf >= 0) assert(cmp_full >= 0);
+        if (cmp_suf <= 0) assert(cmp_full <= 0);
     }
 }
