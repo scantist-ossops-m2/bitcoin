@@ -1832,7 +1832,10 @@ bool PeerManagerImpl::MaybePunishNodeForBlock(NodeId nodeid, const BlockValidati
         return true;
     // Conflicting (but not necessarily invalid) data or different policy:
     case BlockValidationResult::BLOCK_MISSING_PREV:
-        if (peer) Misbehaving(*peer, message);
+        if (peer) {
+            LogPrintf("MISBEHAVE: BLOCK_MISSING_PREV\n");
+            Misbehaving(*peer, message);
+        }
         return true;
     case BlockValidationResult::BLOCK_RECENT_CONSENSUS_CHANGE:
     case BlockValidationResult::BLOCK_TIME_FUTURE:
@@ -2531,6 +2534,7 @@ bool PeerManagerImpl::CheckHeadersPoW(const std::vector<CBlockHeader>& headers, 
 
     // Are these headers connected to each other?
     if (!CheckHeadersAreContinuous(headers)) {
+        LogPrintf("MISBEHAVE: non-continuous\n");
         Misbehaving(peer, "non-continuous headers sequence");
         return false;
     }
@@ -3795,6 +3799,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
 
         if (vAddr.size() > MAX_ADDR_TO_SEND)
         {
+            LogPrintf("MISBEHAVE: MAX_ADDR_TO_SEND\n");
             Misbehaving(*peer, strprintf("%s message size = %u", msg_type, vAddr.size()));
             return;
         }
@@ -3877,6 +3882,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         vRecv >> vInv;
         if (vInv.size() > MAX_INV_SZ)
         {
+            LogPrintf("MISBEHAVE: inv message size\n");
             Misbehaving(*peer, strprintf("inv message size = %u", vInv.size()));
             return;
         }
@@ -3969,6 +3975,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         vRecv >> vInv;
         if (vInv.size() > MAX_INV_SZ)
         {
+            LogPrintf("MISBEHAVE: getdata size\n");
             Misbehaving(*peer, strprintf("getdata message size = %u", vInv.size()));
             return;
         }
@@ -4660,6 +4667,7 @@ void PeerManagerImpl::ProcessMessage(CNode& pfrom, const std::string& msg_type, 
         // Bypass the normal CBlock deserialization, as we don't want to risk deserializing 2000 full blocks.
         unsigned int nCount = ReadCompactSize(vRecv);
         if (nCount > MAX_HEADERS_RESULTS) {
+            LogPrintf("MISBEHAVE: headers message size\n");
             Misbehaving(*peer, strprintf("headers message size = %u", nCount));
             return;
         }
