@@ -676,11 +676,6 @@ void GetStrongRandBytes(Span<unsigned char> bytes) noexcept
 void RandAddPeriodic() noexcept { ProcRand(nullptr, 0, RNGLevel::PERIODIC); }
 void RandAddEvent(const uint32_t event_info) noexcept { GetRNGState().AddEvent(event_info); }
 
-uint64_t GetRandInternal(uint64_t nMax) noexcept
-{
-    return FastRandomContext().randrange(nMax);
-}
-
 uint256 GetRandHash() noexcept
 {
     uint256 hash;
