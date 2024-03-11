@@ -770,8 +770,7 @@ void RandomInit()
     ReportHardwareRand();
 }
 
-std::chrono::microseconds GetExponentialRand(std::chrono::microseconds now, std::chrono::seconds average_interval)
+double MakeExponentiallyDistributed(uint64_t uniform)
 {
-    double unscaled = -std::log1p(GetRand(uint64_t{1} << 48) * -0.0000000000000035527136788 /* -1/2^48 */);
-    return now + std::chrono::duration_cast<std::chrono::microseconds>(unscaled * average_interval + 0.5us);
+    return -std::log1p(uniform * -5.42101086242752217e-20 /* -1/2^64 */);
 }
