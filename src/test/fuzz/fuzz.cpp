@@ -83,6 +83,12 @@ static const TypeTestOneInput* g_test_one_input{nullptr};
 
 void initialize()
 {
+    // By default, make the RNG deterministic with a fixed seed. This will affect all
+    // randomness during the fuzz test, except:
+    // - GetStrongRandBytes(), which is used for the creation of private key material.
+    // - Creating a BasicTestingSetup or derived class will switch to a random seed.
+    SeedRandomForTest(SeedRand::ZEROS);
+
     // Terminate immediately if a fuzzing harness ever tries to create a TCP socket.
     CreateSock = [](const sa_family_t&) -> std::unique_ptr<Sock> { std::terminate(); };
 
