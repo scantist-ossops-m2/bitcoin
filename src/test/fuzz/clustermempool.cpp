@@ -1090,11 +1090,11 @@ FUZZ_TARGET(clustermempool_postlinearize)
     auto lin_pre = DecodeLinearization(buffer, cluster);
     assert(IsTopologicalLinearization(lin_pre, cluster));
     auto lin_post = lin_pre;
-    PostLinearization(cluster, lin_post);
+    PostLinearization<FuzzBitSet, false>(cluster, lin_post);
     assert(IsTopologicalLinearization(lin_post, cluster));
     uint64_t swaps = 0;
     auto lin_postpost = lin_post;
-    PostLinearization(cluster, lin_postpost, &swaps);
+    PostLinearization<FuzzBitSet, false>(cluster, lin_postpost, &swaps);
     assert(lin_postpost == lin_post);
     assert(swaps == 0);
 
@@ -1117,6 +1117,101 @@ FUZZ_TARGET(clustermempool_postlinearize)
 
     for (const auto& [_feerate, chunk] : chunks_post) {
         assert(IsConnectedSubset(cluster, chunk));
+    }
+}
+
+FUZZ_TARGET(clustermempool_postlinearize_rev)
+{
+    Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
+    if (cluster.size() > 10) return;
+    AncestorSets<FuzzBitSet> anc(cluster);
+    if (!IsAcyclic(anc)) return;
+    auto lin_pre = DecodeLinearization(buffer, cluster);
+    assert(IsTopologicalLinearization(lin_pre, cluster));
+    auto lin_post = lin_pre;
+    PostLinearization<FuzzBitSet, true>(cluster, lin_post);
+    assert(IsTopologicalLinearization(lin_post, cluster));
+    uint64_t swaps = 0;
+    auto lin_postpost = lin_post;
+    PostLinearization<FuzzBitSet, true>(cluster, lin_postpost, &swaps);
+    assert(lin_postpost == lin_post);
+    assert(swaps == 0);
+
+    {
+        auto lin_pre2 = lin_pre, lin_post2 = lin_post;
+        std::sort(lin_pre2.begin(), lin_pre2.end());
+        std::sort(lin_post2.begin(), lin_post2.end());
+        assert(lin_pre2 == lin_post2);
+    }
+
+    auto chunks_pre = ChunkLinearization(cluster, lin_pre);
+    VerifyChunking(chunks_pre, cluster);
+    auto chunks_post = ChunkLinearization(cluster, lin_post);
+    VerifyChunking(chunks_post, cluster);
+
+    auto diag_pre = GetLinearizationDiagram(chunks_pre);
+    auto diag_post = GetLinearizationDiagram(chunks_post);
+    auto cmp = CompareFeerateDiagram(diag_post, diag_pre);
+    assert(cmp >= 0);
+
+    for (const auto& [_feerate, chunk] : chunks_post) {
+        assert(IsConnectedSubset(cluster, chunk));
+    }
+}
+
+FUZZ_TARGET(clustermempool_postlinearize_perfect)
+{
+    Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
+    if (cluster.size() == 0 || cluster.size() > 4) return;
+    AncestorSets<FuzzBitSet> anc(cluster);
+    if (!IsAcyclic(anc)) return;
+
+    auto lin = DecodeLinearization(buffer, cluster);
+    while (true) {
+        uint64_t swaps_rev{0}, swaps{0};
+        PostLinearization<FuzzBitSet, true>(cluster, lin, &swaps_rev);
+        PostLinearization<FuzzBitSet, false>(cluster, lin, &swaps);
+        if (swaps_rev == 0 && swaps == 0) break;
+    }
+
+    auto lin_perfect = LinearizeCluster(cluster, cluster.size(), 0).linearization;
+
+    auto chunks = ChunkLinearization(cluster, lin);
+    auto chunks_perfect = ChunkLinearization(cluster, lin_perfect);
+
+    auto diag = GetLinearizationDiagram(chunks);
+    auto diag_perfect = GetLinearizationDiagram(chunks_perfect);
+
+    if (CompareFeerateDiagram(diag, diag_perfect) < 0) {
+        std::cerr << "CLUSTER " << cluster << "\n";
+        std::cerr << "OLDLIN " << lin << "\n";
+        std::cerr << "NEWLIN " << lin_perfect << "\n";
+        assert(false);
+    }
+    assert(CompareFeerateDiagram(diag, diag_perfect) >= 0);
+}
+
+FUZZ_TARGET(clustermempool_postlinearize_loops)
+{
+    Cluster<FuzzBitSet> cluster = DeserializeCluster<FuzzBitSet>(buffer);
+    if (cluster.size() == 0 || cluster.size() > 16) return;
+    AncestorSets<FuzzBitSet> anc(cluster);
+    if (!IsAcyclic(anc)) return;
+
+    auto lin = LinearizeCluster(cluster, 0, 0).linearization;
+    auto lin_pre = lin;
+    int iters = 0;
+    while (true) {
+        uint64_t swaps_rev{0}, swaps{0};
+        PostLinearization<FuzzBitSet, true>(cluster, lin, &swaps_rev);
+        PostLinearization<FuzzBitSet, false>(cluster, lin, &swaps);
+        if (swaps_rev == 0 && swaps == 0) break;
+        ++iters;
+    }
+
+    if (iters > 3) {
+        std::cerr << "CLUSTER " << cluster << " LIN " << lin_pre << " -> " << lin << " ITERS " << iters << "\n";
+        assert(false);
     }
 }
 
